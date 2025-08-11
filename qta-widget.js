@@ -16,7 +16,7 @@
 
   const CONFIG = {
     // Set your secure proxy endpoint here (required for live AI responses)
-    OPENAI_PROXY_URL: 'https://YOUR_DOMAIN.com/api/qta-openai',
+    OPENAI_PROXY_URL: 'https://qta-openai.lucky-limit-b037.workers.dev/',
 
     // UX
     triggerScrollThresholdVH: 0.7, // trigger after ~70% of first viewport
