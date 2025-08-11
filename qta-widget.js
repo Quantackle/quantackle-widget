@@ -2,37 +2,56 @@
   if (window.__qtaWidgetLoaded) return; window.__qtaWidgetLoaded = true;
 
   const CONFIG = {
-    OPENAI_PROXY_URL: 'https://qta-openai.lucky-limit-b037.workers.dev/', // <-- set your Worker URL
+    OPENAI_PROXY_URL: 'https://qta-openai.lucky-limit-b037.workers.dev/', // LLM proxy (unchanged)
     model: 'gpt-4o-mini',
-    triggerScrollThresholdVH: 0.7,
+
+    // ---- UI / behavior ----
     enableVoice: true,
     defaultVolume: 0.9,
-    driftWhenIdle: true,      // subtle micro-movement only when idle
-    driftRadius: 8,           // px around anchor
+    driftWhenIdle: true,
+    driftRadius: 8,
     driftEveryMs: 1800,
-    introMaxSentences: 2,     // 1–3 lines; we clamp by words below
-    introMaxWords: 45,        // guardrail (< ~18s at ~150-180 wpm)
+    triggerScrollThresholdVH: 0.7,
+
+    // Default position (center-right). Can be overridden by persisted position.
+    initial: { top: 0.5, left: null, right: 18 }, // top as fraction of viewport height
+
+    // Intro text limits
+    introMaxSentences: 2,
+    introMaxWords: 45,
+
+    // Copy
     systemPrompt:
       'You are a concise, friendly sales agent for Quantackle. The site offers AI automation audits and implementation. ' +
       'Write a VERY SHORT pitch (1–3 lines, under ~20s aloud). Focus on identifying 2–3 tasks that unlock 30–40% efficiency/savings ' +
       '(e.g., lead triage, weekly reporting, invoice follow-ups). Avoid fluff. Use confident, helpful tone.',
     fallbackPitch:
       'Quick tip: An AI Automation Audit often surfaces 2–3 high-impact tasks—lead triage, weekly reporting, invoice follow-ups—\n' +
-      'that deliver **30–40% time savings** within weeks. Want examples?'
+      'that deliver **30–40% time savings** within weeks. Want examples?',
+
+    // ---- TTS provider selection ----
+    // 'webspeech' uses the built-in browser TTS (no keys required).
+    // 'proxy-tts' expects your proxy to return audio (audio/mpeg|audio/wav) for a given text.
+    ttsProvider: 'webspeech', // 'webspeech' | 'proxy-tts'
+    TTS_PROXY_URL: '',        // e.g., your Cloudflare Worker that calls ElevenLabs/Azure/OpenAI TTS and returns raw audio
+    ttsVoice: 'en-US',        // provider-specific; for webspeech this is just language
   };
 
   // ---------------- Styles ----------------
   const css = `
   :root { --qta-primary:#111827; --qta-accent:#6366f1; --qta-glass:rgba(255,255,255,.5); --qta-shadow:0 10px 30px rgba(0,0,0,.15); }
   .qta-hidden{display:none!important}
-  #qta-widget{position:fixed;right:18px;bottom:18px;z-index:2147483647;font-family:ui-sans-serif,system-ui,Segoe UI,Roboto,Inter,Arial,sans-serif;color:var(--qta-primary)}
-  #qta-launcher{width:68px;height:68px;border-radius:16px;background:var(--qta-glass);backdrop-filter:blur(8px);box-shadow:var(--qta-shadow);display:grid;place-items:center;cursor:pointer;transition:transform .2s;position:relative;contain:layout}
-  #qta-launcher:hover{transform:translateY(-1px)}
+  #qta-widget{position:fixed;inset:0;pointer-events:none;z-index:2147483647;font-family:ui-sans-serif,system-ui,Segoe UI,Roboto,Inter,Arial,sans-serif;color:var(--qta-primary)}
+
+  /* Launcher itself is fixed and draggable */
+  #qta-launcher{position:fixed; width:68px;height:68px;border-radius:16px;background:var(--qta-glass);backdrop-filter:blur(8px);box-shadow:var(--qta-shadow);display:grid;place-items:center;cursor:grab;transition:transform .2s;contain:layout; pointer-events:auto}
+  #qta-launcher:active{cursor:grabbing}
   #qta-bot{width:44px;height:44px;display:block}
   .qta-eye{transform-origin:center;animation:qta-blink 6s infinite}
   @keyframes qta-blink{0%,97%,100%{transform:scaleY(1)}98%,99%{transform:scaleY(.1)}}
-  #qta-bubble{position:fixed;max-width:360px;background:var(--qta-glass);backdrop-filter:blur(8px);border:1px solid rgba(0,0,0,.06);border-radius:14px;padding:12px 14px 10px;box-shadow:var(--qta-shadow)}
-  #qta-bubble-arrow{position:absolute;width:0;height:0}
+
+  /* Bubble is semi-transparent like the bot */
+  #qta-bubble{position:fixed;max-width:360px;background:var(--qta-glass);backdrop-filter:blur(8px);border:1px solid rgba(0,0,0,.06);border-radius:14px;padding:12px 14px 10px;box-shadow:var(--qta-shadow); pointer-events:auto}
   #qta-bubble-header{display:flex;align-items:center;gap:8px;margin-bottom:6px;font-weight:650;letter-spacing:.2px}
   #qta-close-session{margin-left:auto;background:transparent;border:none;font-size:18px;cursor:pointer;line-height:1}
   #qta-typing{line-height:1.45;word-wrap:break-word}
@@ -44,9 +63,11 @@
   .qta-btn-primary{background:var(--qta-accent);color:#fff}
   .qta-vol{appearance:none;height:4px;border-radius:999px;background:#e5e7eb;outline:none;width:90px}
   .qta-vol::-webkit-slider-thumb{appearance:none;width:14px;height:14px;border-radius:50%;background:var(--qta-accent)}
-  #qta-panel{position:fixed;right:18px;bottom:96px;width:380px;max-width:86vw;background:var(--qta-glass);backdrop-filter:blur(8px);border-radius:16px;box-shadow:var(--qta-shadow);border:1px solid rgba(0,0,0,.06);overflow:hidden;display:none}
+
+  #qta-panel{position:fixed;right:18px;bottom:96px;width:380px;max-width:86vw;background:var(--qta-glass);backdrop-filter:blur(8px);border-radius:16px;box-shadow:var(--qta-shadow);border:1px solid rgba(0,0,0,.06);overflow:hidden;display:none; pointer-events:auto}
   #qta-panel header{display:flex;align-items:center;justify-content:space-between;padding:10px 12px;background:rgba(248,250,252,.7);border-bottom:1px solid rgba(0,0,0,.06);font-weight:650}
   #qta-panel main{padding:12px}
+
   @media (max-width: 640px){
     #qta-launcher{width:56px;height:56px;border-radius:14px}
     #qta-bot{width:34px;height:34px}
@@ -91,14 +112,12 @@
           <button id="qta-more" class="qta-btn qta-btn-primary">Hear More</button>
           <button id="qta-mute" class="qta-btn qta-btn-ghost">Mute</button>
         </div>
-        <div id="qta-bubble-arrow"></div>
       </div>
     </div>
   `;
   document.body.appendChild(root);
 
   const bubble = root.querySelector('#qta-bubble');
-  const bubbleArrow = root.querySelector('#qta-bubble-arrow');
   const typingEl = root.querySelector('#qta-typing');
   const panel = root.querySelector('#qta-panel');
   const panelContent = root.querySelector('#qta-panel-content');
@@ -113,22 +132,87 @@
 
   const initialMouthD = mouth.getAttribute('d');
 
-  // State
+  // -------------- State --------------
   let isMuted = localStorage.getItem('qta_muted') === '1';
   let volume = parseFloat(localStorage.getItem('qta_volume') || CONFIG.defaultVolume);
   let isSpeaking = false;
   let driftTimer = null;
+  let dragging = false;
+  let dragOffset = { x: 0, y: 0 };
+  let anchor = { x: 0, y: 0 }; // micro drift around the current fixed position
 
   volumeSlider.value = String(volume);
   updateMuteUI();
 
+  // -------------- Positioning --------------
+  const savedPos = JSON.parse(localStorage.getItem('qta_pos') || 'null');
+  function applyInitialPosition(){
+    let topPx, leftPx, rightPx;
+    if (savedPos) {
+      topPx = savedPos.top; leftPx = savedPos.left; rightPx = savedPos.right;
+    } else {
+      const vh = window.innerHeight;
+      topPx = Math.round(vh * CONFIG.initial.top - 34); // center by half height
+      leftPx = null; rightPx = CONFIG.initial.right;
+    }
+    setLauncherPosition({ top: topPx, left: leftPx, right: rightPx });
+  }
+  function setLauncherPosition({ top, left, right }){
+    if (typeof top === 'number') launcher.style.top = `${Math.max(10, Math.min(window.innerHeight - launcher.offsetHeight - 10, top))}px`;
+    if (left == null) {
+      launcher.style.left = '';
+    } else {
+      launcher.style.left = `${Math.max(10, Math.min(window.innerWidth - launcher.offsetWidth - 10, left))}px`;
+    }
+    if (right == null) {
+      launcher.style.right = '';
+    } else {
+      launcher.style.right = `${right}px`;
+    }
+  }
+  function persistPosition(){
+    const styleTop = parseFloat(launcher.style.top || '0');
+    const styleLeft = launcher.style.left ? parseFloat(launcher.style.left) : null;
+    const styleRight = launcher.style.right ? parseFloat(launcher.style.right) : null;
+    localStorage.setItem('qta_pos', JSON.stringify({ top: styleTop, left: styleLeft, right: styleRight }));
+  }
+
+  // -------------- Events --------------
   panelClose.addEventListener('click', () => panel.style.display = 'none');
-  launcher.addEventListener('click', () => { panel.style.display = (panel.style.display === 'block') ? 'none' : 'block'; });
+  launcher.addEventListener('click', (e) => {
+    if (dragging) return; // ignore click after drag
+    panel.style.display = (panel.style.display === 'block') ? 'none' : 'block';
+  });
   examplesBtn.addEventListener('click', () => { openPanel(); panelContent.innerHTML = renderExamples(); });
   moreBtn.addEventListener('click', async () => { await say(await fetchPitch({ more:true })); });
   closeSessionBtn.addEventListener('click', () => { sessionStorage.setItem('qta_closed_session','1'); cleanupSpeech(); hideAll(); });
   muteBtn.addEventListener('click', toggleMute);
   volumeSlider.addEventListener('input', () => { volume = parseFloat(volumeSlider.value); localStorage.setItem('qta_volume', String(volume)); });
+
+  // Drag logic (pointer events)
+  launcher.addEventListener('pointerdown', (e) => {
+    dragging = true; stopDrift(); setSpeaking(false);
+    launcher.setPointerCapture(e.pointerId);
+    const rect = launcher.getBoundingClientRect();
+    dragOffset.x = e.clientX - rect.left;
+    dragOffset.y = e.clientY - rect.top;
+  });
+  window.addEventListener('pointermove', (e) => {
+    if (!dragging) return;
+    const nx = Math.max(10, Math.min(window.innerWidth - launcher.offsetWidth - 10, e.clientX - dragOffset.x));
+    const ny = Math.max(10, Math.min(window.innerHeight - launcher.offsetHeight - 10, e.clientY - dragOffset.y));
+    launcher.style.left = `${nx}px`;
+    launcher.style.top = `${ny}px`;
+    launcher.style.right = '';
+    anchor = { x: 0, y: 0 };
+    ensureBubbleInView();
+  }, { passive: true });
+  window.addEventListener('pointerup', (e) => {
+    if (!dragging) return;
+    dragging = false; launcher.releasePointerCapture?.(e.pointerId);
+    persistPosition();
+    startDrift();
+  });
 
   function toggleMute(){ isMuted = !isMuted; localStorage.setItem('qta_muted', isMuted ? '1' : '0'); updateMuteUI(); if (isMuted) cleanupSpeech(); }
   function updateMuteUI(){ muteBtn.textContent = isMuted ? 'Unmute' : 'Mute'; }
@@ -136,9 +220,8 @@
   function hideAll(){ bubble.classList.add('qta-hidden'); panel.style.display='none'; }
 
   // ------- Subtle drift (idle only) -------
-  const anchor = { x: 0, y: 0 };
-  function startDrift(){ if (!CONFIG.driftWhenIdle || driftTimer) return; driftTimer = setInterval(()=>{ if (isSpeaking) return; const dx=(Math.random()*2-1)*CONFIG.driftRadius; const dy=(Math.random()*2-1)*CONFIG.driftRadius; anchor.x = Math.max(-12, Math.min(12, anchor.x+dx)); anchor.y = Math.max(-12, Math.min(12, anchor.y+dy)); launcher.style.transform = `translate(${anchor.x}px, ${anchor.y}px)`; ensureBubbleInView(); }, CONFIG.driftEveryMs); }
-  function stopDrift(){ if (driftTimer){ clearInterval(driftTimer); driftTimer=null; } }
+  function startDrift(){ if (!CONFIG.driftWhenIdle || driftTimer) return; driftTimer = setInterval(()=>{ if (isSpeaking || dragging) return; const dx=(Math.random()*2-1)*CONFIG.driftRadius; const dy=(Math.random()*2-1)*CONFIG.driftRadius; anchor.x = Math.max(-12, Math.min(12, anchor.x+dx)); anchor.y = Math.max(-12, Math.min(12, anchor.y+dy)); launcher.style.transform = `translate(${anchor.x}px, ${anchor.y}px)`; ensureBubbleInView(); }, CONFIG.driftEveryMs); }
+  function stopDrift(){ if (driftTimer){ clearInterval(driftTimer); driftTimer=null; } launcher.style.transform = 'translate(0,0)'; }
 
   // ------- Fetch pitch (intro or more) -------
   async function fetchPitch(opts={}){
@@ -164,8 +247,36 @@
     return out;
   }
 
+  // ------- TTS: webspeech or proxy -------
+  async function speak(text){
+    if (!CONFIG.enableVoice || isMuted) return null;
+    if (CONFIG.ttsProvider === 'proxy-tts' && CONFIG.TTS_PROXY_URL) {
+      try {
+        const controller = new AbortController();
+        const res = await fetch(CONFIG.TTS_PROXY_URL, { method: 'POST', body: JSON.stringify({ text, voice: CONFIG.ttsVoice }), headers: { 'Content-Type': 'application/json' }, signal: controller.signal });
+        if (!res.ok) throw new Error('Bad TTS response');
+        const type = res.headers.get('Content-Type') || 'audio/mpeg';
+        const buf = await res.arrayBuffer();
+        const blob = new Blob([buf], { type });
+        const url = URL.createObjectURL(blob);
+        const audio = new Audio(url);
+        audio.volume = Math.max(0, Math.min(1, volume));
+        await audio.play();
+        return { stop: () => { try { audio.pause(); audio.currentTime = 1e9; } catch {} URL.revokeObjectURL(url); } };
+      } catch (e) { /* fall back */ }
+    }
+
+    if (!('speechSynthesis' in window)) return null;
+    const u = new SpeechSynthesisUtterance(text.replace(/[*_`]/g,''));
+    u.rate = 1.02; u.pitch = 1; u.lang = CONFIG.ttsVoice || 'en-US'; u.volume = Math.max(0, Math.min(1, volume));
+    speechSynthesis.cancel();
+    speechSynthesis.speak(u);
+    return { stop: () => { try { speechSynthesis.cancel(); } catch {} } };
+  }
+
   // ------- Speak & Type (synced) -------
   async function say(text){
+    // Always show bubble and sync with speech
     bubble.classList.remove('qta-hidden');
     ensureBubbleInView();
     typingEl.textContent = '';
@@ -173,37 +284,34 @@
     setSpeaking(true);
 
     const caret = document.createElement('span'); caret.id='qta-caret'; typingEl.appendChild(caret);
-    let typedLen = 0; let boundarySeen = false; let fallbackTimer = null; let mouthTimer = null;
+    let typedLen = 0; let boundarySeen = false; let fallbackTimer = null; let mouthTimer = null; let speaker = null;
 
     function typeTo(idx){ if (idx<=typedLen) return; typingEl.textContent = text.slice(0, idx); typingEl.appendChild(caret); typedLen = idx; ensureBubbleInView(); }
-    function pulseMouth(){
-      mouth.setAttribute('d', 'M 22 39 Q 32 45 42 39');
-      setTimeout(()=> mouth.setAttribute('d', 'M 22 39 Q 32 42 42 39'), 120);
-    }
+    function pulseMouth(){ mouth.setAttribute('d', 'M 22 39 Q 32 45 42 39'); setTimeout(()=> mouth.setAttribute('d', 'M 22 39 Q 32 42 42 39'), 120); }
 
-    if (!CONFIG.enableVoice || isMuted || !('speechSynthesis' in window)){
-      await typeOnly(text); finish(); return;
-    }
     try {
-      const u = new SpeechSynthesisUtterance(text.replace(/[*_`]/g,''));
-      u.rate = 1.05; u.pitch = 1; u.lang = 'en-US'; u.volume = Math.max(0, Math.min(1, volume));
-
-      const hasBoundary = 'onboundary' in SpeechSynthesisUtterance.prototype;
-      if (hasBoundary){
+      // Start speech (webspeech or proxy)
+      if (CONFIG.ttsProvider === 'webspeech' && 'onboundary' in SpeechSynthesisUtterance.prototype) {
+        const u = new SpeechSynthesisUtterance(text.replace(/[*_`]/g,''));
+        u.rate = 1.02; u.pitch = 1; u.lang = CONFIG.ttsVoice || 'en-US'; u.volume = Math.max(0, Math.min(1, volume));
         u.onboundary = (e)=>{ boundarySeen=true; const idx = e.charIndex || 0; typeTo(idx); pulseMouth(); };
+        u.onstart = ()=>{ fallbackTimer = setTimeout(()=>{ if (!boundarySeen){ timedFallbackType(text, typeTo); } }, 300); mouthTimer = setInterval(pulseMouth, 420); };
+        u.onend = ()=>{ if (fallbackTimer) clearTimeout(fallbackTimer); if (mouthTimer) clearInterval(mouthTimer); finish(); };
+        speechSynthesis.cancel(); speechSynthesis.speak(u);
+      } else {
+        // Proxy TTS (or webspeech without boundary events) → manual type cadence
+        speaker = await speak(text);
+        fallbackTimer = timedFallbackType(text, typeTo);
+        mouthTimer = setInterval(pulseMouth, 420);
+        // naive duration estimate; stop typing when text ends
+        const estimatedMs = Math.max(3000, Math.min(15000, text.split(/\s+/).length * 350));
+        setTimeout(()=>{ clearInterval(mouthTimer); finish(); }, estimatedMs);
       }
-      u.onstart = ()=>{
-        fallbackTimer = setTimeout(()=>{ if (!boundarySeen){ timedFallbackType(text, typeTo); } }, 300);
-        mouthTimer = setInterval(pulseMouth, 400);
-      };
-      u.onend = ()=>{ if (fallbackTimer) clearInterval(fallbackTimer); if (mouthTimer) clearInterval(mouthTimer); finish(); };
-
-      speechSynthesis.cancel(); speechSynthesis.speak(u);
-    } catch{
+    } catch {
       await typeOnly(text); finish();
     }
 
-    function finish(){ typingEl.textContent = text; caret.remove(); setSpeaking(false); startDrift(); mouth.setAttribute('d', initialMouthD); }
+    function finish(){ typingEl.textContent = text; try{ caret.remove(); }catch{} setSpeaking(false); startDrift(); mouth.setAttribute('d', initialMouthD); speaker?.stop?.(); }
   }
 
   function timedFallbackType(text, typeTo){
@@ -216,7 +324,7 @@
   function sleep(ms){ return new Promise(r=>setTimeout(r,ms)); }
 
   function setSpeaking(v){ isSpeaking = !!v; if (v) stopDrift(); }
-  function cleanupSpeech(){ if ('speechSynthesis' in window){ try{ speechSynthesis.cancel(); }catch{} } setSpeaking(false); mouth.setAttribute('d', initialMouthD); }
+  function cleanupSpeech(){ try{ speechSynthesis.cancel(); }catch{} setSpeaking(false); mouth.setAttribute('d', initialMouthD); }
 
   // ------- Bubble positioning (always in viewport) -------
   function ensureBubbleInView(){
@@ -231,17 +339,6 @@
     const left = sideRight ? (lRect.right + 12) : (lRect.left - bRect.width - 12);
     bubble.style.top = `${Math.max(10, top)}px`;
     bubble.style.left = `${Math.max(10, Math.min(vw - bRect.width - 10, left))}px`;
-    bubbleArrow.style.border = '6px solid transparent';
-    bubbleArrow.style.position = 'absolute';
-    if (sideRight){
-      bubbleArrow.style.borderRightColor = 'rgba(255,255,255,.5)';
-      bubbleArrow.style.left = '-12px';
-      bubbleArrow.style.top = `${(bRect.height/2)-6}px`;
-    } else {
-      bubbleArrow.style.borderLeftColor = 'rgba(255,255,255,.5)';
-      bubbleArrow.style.left = `${bRect.width}px`;
-      bubbleArrow.style.top = `${(bRect.height/2)-6}px`;
-    }
   }
   window.addEventListener('resize', ensureBubbleInView, { passive:true });
   window.addEventListener('scroll', ensureBubbleInView, { passive:true });
@@ -251,13 +348,15 @@
   function shouldTrigger(){ return scrollY > innerHeight * CONFIG.triggerScrollThresholdVH; }
   async function maybeTrigger(){ if (hasTriggered) return; if (!shouldTrigger()) return; hasTriggered = true; const msg = await fetchPitch(); await say(msg); }
   addEventListener('scroll', maybeTrigger, { passive:true });
-  addEventListener('load', () => setTimeout(maybeTrigger, 1200));
+  addEventListener('load', () => { applyInitialPosition(); setTimeout(maybeTrigger, 1200); startDrift(); });
 
+  // Public API
   window.QTA = {
     force: async () => { const msg = await fetchPitch(); await say(msg); },
     say: async (t) => say(t),
     mute: () => { if (!isMuted){ toggleMute(); } },
-    unmute: () => { if (isMuted){ toggleMute(); } }
+    unmute: () => { if (isMuted){ toggleMute(); } },
+    setPosition: (top, left) => { setLauncherPosition({ top, left, right: null }); persistPosition(); }
   };
 
   function renderExamples(){
@@ -274,6 +373,4 @@
         </div>
       </div>`;
   }
-
-  startDrift();
 })();
