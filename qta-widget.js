@@ -32,8 +32,9 @@
       'that deliver **30–40% time savings** within weeks. Want examples?',
 
     // ---- TTS (ElevenLabs via proxy) ----
-    ttsProvider: 'proxy-tts', // 'webspeech' | 'proxy-tts'
-    TTS_PROXY_URL: 'https://eleven-labs.lucky-limit-b037.workers.dev/', // Cloudflare Worker from File 2
+    ttsProvider: 'proxy-tts',
+    // IMPORTANT: must end with /tts (Worker route).
+    TTS_PROXY_URL: 'https://eleven-labs.lucky-limit-b037.workers.dev/tts',
     ttsVoice: 'cgSgspJ2msm6clMCkdW9', // Jessica
     eleven: {
       model: 'eleven_flash_v2',
@@ -54,8 +55,8 @@
   .qta-eye{transform-origin:center;animation:qta-blink 6s infinite}
   @keyframes qta-blink{0%,97%,100%{transform:scaleY(1)}98%,99%{transform:scaleY(.1)}}
 
-  /* Bubble (50% smaller font, wider max width, semi-transparent) */
-  #qta-bubble{position:fixed;min-width:240px;max-width:min(520px,86vw);background:var(--qta-glass);backdrop-filter:blur(8px);border:1px solid rgba(0,0,0,.06);border-radius:14px;padding:8px 10px;box-shadow:var(--qta-shadow); pointer-events:auto}
+  /* Bubble (compact, semi-transparent) */
+  #qta-bubble{position:fixed;z-index:2147483647;min-width:240px;max-width:min(520px,86vw);background:var(--qta-glass);backdrop-filter:blur(8px);border:1px solid rgba(0,0,0,.06);border-radius:14px;padding:8px 10px;box-shadow:var(--qta-shadow); pointer-events:auto}
   #qta-bubble *{font-size:11px}
   #qta-bubble-header{display:flex;align-items:center;gap:8px;margin-bottom:4px;font-weight:650;letter-spacing:.2px}
   #qta-close-session{margin-left:auto;background:transparent;border:none;font-size:14px;cursor:pointer;line-height:1}
@@ -69,9 +70,9 @@
   .qta-vol{appearance:none;height:3px;border-radius:999px;background:#e5e7eb;outline:none;width:90px}
   .qta-vol::-webkit-slider-thumb{appearance:none;width:12px;height:12px;border-radius:50%;background:var(--qta-accent)}
 
-  #qta-panel{position:fixed;right:18px;bottom:96px;width:380px;max-width:86vw;background:var(--qta-glass);backdrop-filter:blur(8px);border-radius:16px;box-shadow:var(--qta-shadow);border:1px solid rgba(0,0,0,.06);overflow:hidden;display:none; pointer-events:auto}
+  #qta-panel{position:fixed;right:18px;bottom:96px;width:380px;max-width:86vw;background:var(--qta-glass);backdrop-filter:blur(8px);border-radius:16px;box-shadow:var(--qta-shadow);border:1px solid rgba(0,0,0,.06);overflow:hidden;display:none; pointer-events:auto; z-index:2147483647}
   #qta-panel header{display:flex;align-items:center;justify-content:space-between;padding:8px 10px;background:rgba(248,250,252,.7);border-bottom:1px solid rgba(0,0,0,.06);font-weight:650}
-  #qta-panel main{padding:10px}
+  .qta-panel-main{padding:10px}
 
   @media (max-width: 640px){
     #qta-launcher{width:56px;height:56px;border-radius:14px}
@@ -84,7 +85,7 @@
   `;
   const style = document.createElement('style'); style.textContent = css; document.head.appendChild(style);
 
-  if (sessionStorage.getItem('qta_closed_session') === '1') return;
+  if (sessionStorage.getItem('qta_closed_session_v2') === '1') return;
 
   // ---------------- DOM ----------------
   const root = document.createElement('div'); root.id = 'qta-widget';
@@ -94,7 +95,7 @@
         <span style="display:flex;align-items:center;gap:8px">🔎 Quantackle Assistant</span>
         <button id="qta-panel-close" aria-label="Close panel" class="qta-btn qta-btn-ghost">Close</button>
       </header>
-      <main id="qta-panel-content"></main>
+      <div id="qta-panel-content" class="qta-panel-main"></div>
     </div>
 
     <div id="qta-launcher" aria-label="Open assistant" title="Ask Quantackle">
@@ -145,28 +146,24 @@
   let driftTimer = null;
   let dragging = false;
   let dragOffset = { x: 0, y: 0 };
+  let dragBubbleLock = null; // keeps bubble glued during drag
 
   volumeSlider.value = String(volume);
   updateMuteUI();
 
-  // -------------- Positioning (left/top only; keeps bubble glued) --------------
+  // -------------- Positioning --------------
   const savedPos = JSON.parse(localStorage.getItem('qta_pos') || 'null');
   function applyInitialPosition(){
     let topPx, leftPx;
-    if (savedPos) {
-      topPx = savedPos.top; leftPx = savedPos.left;
-    } else {
-      const vh = window.innerHeight; const vw = window.innerWidth;
-      topPx = Math.round(vh * CONFIG.initial.top - 34); // center by half launcher height
-      leftPx = vw - CONFIG.initial.right - 68; // convert right→left once; we only use left/top afterward
-    }
+    if (savedPos) { topPx = savedPos.top; leftPx = savedPos.left; }
+    else { const vh = window.innerHeight; const vw = window.innerWidth; topPx = Math.round(vh * CONFIG.initial.top - 34); leftPx = vw - CONFIG.initial.right - 68; }
     setLauncherPosition({ top: topPx, left: leftPx });
   }
   function setLauncherPosition({ top, left }){
     if (typeof top === 'number') launcher.style.top = `${Math.max(10, Math.min(window.innerHeight - launcher.offsetHeight - 10, top))}px`;
     if (typeof left === 'number') launcher.style.left = `${Math.max(10, Math.min(window.innerWidth - launcher.offsetWidth - 10, left))}px`;
     launcher.style.right = '';
-    ensureBubbleAnchor();
+    if (!dragging) ensureBubbleAnchor();
   }
   function persistPosition(){
     const styleTop = parseFloat(launcher.style.top || '0');
@@ -179,28 +176,40 @@
   launcher.addEventListener('click', (e) => { if (dragging) return; panel.style.display = (panel.style.display === 'block') ? 'none' : 'block'; });
   examplesBtn.addEventListener('click', handleExamplesClick);
   moreBtn.addEventListener('click', async () => { await say(await fetchPitch({ more:true })); });
-  closeSessionBtn.addEventListener('click', () => { sessionStorage.setItem('qta_closed_session','1'); cleanupSpeech(); hideAll(); });
+  closeSessionBtn.addEventListener('click', () => { sessionStorage.setItem('qta_closed_session_v2','1'); cleanupSpeech(); hideAll(); });
   muteBtn.addEventListener('click', toggleMute);
   volumeSlider.addEventListener('input', () => { volume = parseFloat(volumeSlider.value); localStorage.setItem('qta_volume', String(volume)); });
 
-  // Drag logic (pointer events)
+  // Drag logic
   launcher.addEventListener('pointerdown', (e) => {
     dragging = true; stopDrift(); setSpeaking(false);
     launcher.setPointerCapture(e.pointerId);
     const rect = launcher.getBoundingClientRect();
-    dragOffset.x = e.clientX - rect.left;
-    dragOffset.y = e.clientY - rect.top;
+    dragOffset.x = e.clientX - rect.left; dragOffset.y = e.clientY - rect.top;
+    // lock bubble offset relative to launcher during drag
+    if (!bubble.classList.contains('qta-hidden')) {
+      const l = rect; const b = bubble.getBoundingClientRect();
+      dragBubbleLock = { dx: b.left - l.right, dy: b.top - l.top };
+    } else dragBubbleLock = null;
+    ensureBubbleAnchor();
   });
   window.addEventListener('pointermove', (e) => {
     if (!dragging) return;
     const nx = Math.max(10, Math.min(window.innerWidth - launcher.offsetWidth - 10, e.clientX - dragOffset.x));
     const ny = Math.max(10, Math.min(window.innerHeight - launcher.offsetHeight - 10, e.clientY - dragOffset.y));
     launcher.style.left = `${nx}px`; launcher.style.top = `${ny}px`;
-    ensureBubbleAnchor();
+    if (dragBubbleLock) {
+      const lRect = launcher.getBoundingClientRect();
+      bubble.style.left = `${lRect.right + dragBubbleLock.dx}px`;
+      bubble.style.top  = `${lRect.top   + dragBubbleLock.dy}px`;
+    } else {
+      ensureBubbleAnchor();
+    }
   }, { passive: true });
   window.addEventListener('pointerup', (e) => {
     if (!dragging) return;
     dragging = false; launcher.releasePointerCapture?.(e.pointerId);
+    dragBubbleLock = null; ensureBubbleAnchor();
     persistPosition(); startDrift();
   });
 
@@ -209,53 +218,45 @@
   function openPanel(){ panel.style.display = 'block'; }
   function hideAll(){ bubble.classList.add('qta-hidden'); panel.style.display='none'; }
 
-  // ------- Subtle drift (left/top; keeps bubble glued) -------
+  // ------- Subtle drift -------
   function startDrift(){ if (!CONFIG.driftWhenIdle || driftTimer) return; driftTimer = setInterval(()=>{
-    if (isSpeaking || dragging) return;
-    const rect = launcher.getBoundingClientRect();
+    if (isSpeaking || dragging) return; const rect = launcher.getBoundingClientRect();
     const dx=(Math.random()*2-1)*CONFIG.driftRadius; const dy=(Math.random()*2-1)*CONFIG.driftRadius;
     setLauncherPosition({ top: rect.top + dy, left: rect.left + dx });
-    ensureBubbleAnchor();
   }, CONFIG.driftEveryMs); }
   function stopDrift(){ if (driftTimer){ clearInterval(driftTimer); driftTimer=null; } }
 
   // ------- Fetch pitch / examples -------
+  function pickContent(data){
+    return data?.content || data?.message || data?.text || data?.choices?.[0]?.message?.content || '';
+  }
   async function fetchPitch(opts={}){
     const context = (document.querySelector('main')?.innerText || document.body.innerText || '').slice(0, 1600);
     const modePrompt = opts.more ? 'Give one short follow-up (1–2 sentences) with concrete examples tailored to the context. Keep it brief.' : CONFIG.systemPrompt;
     try {
-      const res = await fetch(CONFIG.OPENAI_PROXY_URL, {
-        method:'POST', headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({ model: CONFIG.model, messages:[ {role:'system', content: modePrompt}, {role:'user', content:`Use this page context if helpful. Be brief.\n\n${context}`} ], max_tokens: opts.more ? 90 : 110 })
-      });
+      const res = await fetch(CONFIG.OPENAI_PROXY_URL, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ model: CONFIG.model, messages:[ {role:'system', content: modePrompt}, {role:'user', content:`Use this page context if helpful. Be brief.\n\n${context}`} ], max_tokens: opts.more ? 90 : 110 }) });
       const data = await res.json();
-      const raw = (data && data.content) || CONFIG.fallbackPitch;
+      const raw = pickContent(data) || CONFIG.fallbackPitch;
       return opts.more ? raw : clipIntro(raw);
     } catch(e){ return opts.more ? 'For example: lead triage, reporting, invoice nudges. Want a 10-min audit call?' : CONFIG.fallbackPitch; }
   }
-
   async function fetchExamples(){
     const context = (document.querySelector('main')?.innerText || document.body.innerText || '').slice(0, 1600);
     try {
-      const res = await fetch(CONFIG.OPENAI_PROXY_URL, {
-        method:'POST', headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({ model: CONFIG.model, messages:[ {role:'system', content: CONFIG.examplesPrompt}, {role:'user', content:`Tailor to this page context.\n\n${context}`} ], max_tokens: 120 })
-      });
+      const res = await fetch(CONFIG.OPENAI_PROXY_URL, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ model: CONFIG.model, messages:[ {role:'system', content: CONFIG.examplesPrompt}, {role:'user', content:`Tailor to this page context.\n\n${context}`} ], max_tokens: 120 }) });
       const data = await res.json();
-      return (data && data.content) || '• Show a 4-week automation plan\n• Estimate ROI from AI audit\n• What can you automate first?';
+      const txt = pickContent(data) || '• Show a 4-week automation plan\n• Estimate ROI from AI audit\n• What can you automate first?';
+      return txt;
     } catch(e){ return '• Lead triage with enrichment\n• Auto-build monthly reports\n• Invoice reminders that work'; }
   }
 
   function renderExamples(list){
-    const html = list.split(/\n+/).map(line => `<div>${line}</div>`).join('');
+    const html = String(list).split(/\n+/).map(line => `<div>${line}</div>`).join('');
     return `<div style="display:flex;flex-direction:column;gap:6px;line-height:1.35">${html}</div>`;
   }
-
   async function handleExamplesClick(){
-    openPanel();
-    panelContent.innerHTML = '<div style="opacity:.7">Generating examples…</div>';
-    const list = await fetchExamples();
-    panelContent.innerHTML = renderExamples(list);
+    openPanel(); panelContent.innerHTML = '<div style="opacity:.7">Generating examples…</div>';
+    const list = await fetchExamples(); panelContent.innerHTML = renderExamples(list);
   }
 
   function clipIntro(text){
@@ -272,42 +273,35 @@
     if (!CONFIG.enableVoice || isMuted) return null;
     if (CONFIG.ttsProvider === 'proxy-tts' && CONFIG.TTS_PROXY_URL) {
       try {
-        const res = await fetch(CONFIG.TTS_PROXY_URL, {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ text, voice: CONFIG.ttsVoice, model: CONFIG.eleven.model, instruction: CONFIG.eleven.instruction })
-        });
+        const res = await fetch(CONFIG.TTS_PROXY_URL, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text, voice: CONFIG.ttsVoice, model: CONFIG.eleven.model, instruction: CONFIG.eleven.instruction }) });
         if (!res.ok) throw new Error('Bad TTS response');
         const type = res.headers.get('Content-Type') || 'audio/mpeg';
         const buf = await res.arrayBuffer();
         const blob = new Blob([buf], { type });
         const url = URL.createObjectURL(blob);
-        const audio = new Audio(url);
-        audio.volume = Math.max(0, Math.min(1, volume));
-        await audio.play();
+        const audio = new Audio(url); audio.volume = Math.max(0, Math.min(1, volume)); await audio.play();
         return { stop: () => { try { audio.pause(); audio.currentTime = 1e9; } catch {} URL.revokeObjectURL(url); } };
-      } catch (e) { /* fall through to webspeech */ }
+      } catch (e) {
+        // fall through to Web Speech
+      }
     }
 
     if (!('speechSynthesis' in window)) return null;
     const u = new SpeechSynthesisUtterance(text.replace(/[*_`]/g,''));
     u.rate = 1.02; u.pitch = 1; u.lang = 'en-US'; u.volume = Math.max(0, Math.min(1, volume));
-    speechSynthesis.cancel();
-    speechSynthesis.speak(u);
+    speechSynthesis.cancel(); speechSynthesis.speak(u);
     return { stop: () => { try { speechSynthesis.cancel(); } catch {} } };
   }
 
   // ------- Speak & Type (synced) -------
   async function say(text){
-    bubble.classList.remove('qta-hidden');
-    ensureBubbleAnchor();
-    typingEl.textContent = '';
-    stopDrift();
-    setSpeaking(true);
+    bubble.classList.remove('qta-hidden'); ensureBubbleAnchor();
+    typingEl.textContent = ''; stopDrift(); setSpeaking(true);
 
     const caret = document.createElement('span'); caret.id='qta-caret'; typingEl.appendChild(caret);
     let typedLen = 0; let boundarySeen = false; let fallbackTimer = null; let mouthTimer = null; let speaker = null;
 
-    function typeTo(idx){ if (idx<=typedLen) return; typingEl.textContent = text.slice(0, idx); typingEl.appendChild(caret); typedLen = idx; ensureBubbleAnchor(); }
+    function typeTo(idx){ if (idx<=typedLen) return; typingEl.textContent = text.slice(0, idx); typingEl.appendChild(caret); typedLen = idx; if(!dragging) ensureBubbleAnchor(); }
     function pulseMouth(){ mouth.setAttribute('d', 'M 22 39 Q 32 45 42 39'); setTimeout(()=> mouth.setAttribute('d', 'M 22 39 Q 32 42 42 39'), 120); }
 
     try {
@@ -319,27 +313,16 @@
         u.onend = ()=>{ if (fallbackTimer) clearTimeout(fallbackTimer); if (mouthTimer) clearInterval(mouthTimer); finish(); };
         speechSynthesis.cancel(); speechSynthesis.speak(u);
       } else {
-        // Proxy TTS (or browsers w/o boundary events) → manual type cadence
-        speaker = await speak(text);
-        fallbackTimer = timedFallbackType(text, typeTo);
-        mouthTimer = setInterval(pulseMouth, 420);
-        const estimatedMs = Math.max(3000, Math.min(15000, text.split(/\s+/).length * 350));
-        setTimeout(()=>{ clearInterval(mouthTimer); finish(); }, estimatedMs);
+        speaker = await speak(text); fallbackTimer = timedFallbackType(text, typeTo); mouthTimer = setInterval(pulseMouth, 420);
+        const estimatedMs = Math.max(3000, Math.min(15000, text.split(/\s+/).length * 350)); setTimeout(()=>{ clearInterval(mouthTimer); finish(); }, estimatedMs);
       }
-    } catch {
-      await typeOnly(text); finish();
-    }
+    } catch { await typeOnly(text); finish(); }
 
     function finish(){ typingEl.textContent = text; try{ caret.remove(); }catch{} setSpeaking(false); startDrift(); mouth.setAttribute('d', initialMouthD); speaker?.stop?.(); }
   }
 
-  function timedFallbackType(text, typeTo){
-    const chunk = 3; let i = 0; const ms = Math.max(12, Math.floor(6000 / Math.max(40, text.length)));
-    const t = setInterval(()=>{ i = Math.min(text.length, i+chunk); typeTo(i); if (i>=text.length) clearInterval(t); }, ms);
-    return t;
-  }
-
-  async function typeOnly(text){ const chunk=3; for(let i=0;i<text.length;i+=chunk){ typingEl.textContent += text.slice(i,i+chunk); await sleep(16); ensureBubbleAnchor(); } }
+  function timedFallbackType(text, typeTo){ const chunk = 3; let i = 0; const ms = Math.max(12, Math.floor(6000 / Math.max(40, text.length))); const t = setInterval(()=>{ i = Math.min(text.length, i+chunk); typeTo(i); if (i>=text.length) clearInterval(t); }, ms); return t; }
+  async function typeOnly(text){ const chunk=3; for(let i=0;i<text.length;i+=chunk){ typingEl.textContent += text.slice(i,i+chunk); await sleep(16); if(!dragging) ensureBubbleAnchor(); } }
   function sleep(ms){ return new Promise(r=>setTimeout(r,ms)); }
 
   function setSpeaking(v){ isSpeaking = !!v; if (v) stopDrift(); }
@@ -350,21 +333,17 @@
     const lRect = launcher.getBoundingClientRect();
     const bRect = bubble.getBoundingClientRect();
     const vw = window.innerWidth, vh = window.innerHeight;
-    let sideRight = true;
-    if (lRect.right + 12 + bRect.width > vw) sideRight = false;
+    let sideRight = lRect.right + 12 + bRect.width <= vw;
     let top = lRect.top + lRect.height/2 - bRect.height/2;
-    if (top + bRect.height > vh - 10) top = vh - bRect.height - 10;
-    if (top < 10) top = 10;
+    if (top + bRect.height > vh - 10) top = vh - bRect.height - 10; if (top < 10) top = 10;
     const left = sideRight ? (lRect.right + 10) : (lRect.left - bRect.width - 10);
-    bubble.style.top = `${Math.max(10, top)}px`;
-    bubble.style.left = `${Math.max(10, Math.min(vw - bRect.width - 10, left))}px`;
+    bubble.style.top = `${Math.max(10, top)}px`; bubble.style.left = `${Math.max(10, Math.min(vw - bRect.width - 10, left))}px`;
   }
   window.addEventListener('resize', ensureBubbleAnchor, { passive:true });
   window.addEventListener('scroll', ensureBubbleAnchor, { passive:true });
 
   // ------- Trigger after hero -------
-  let hasTriggered = false;
-  function shouldTrigger(){ return scrollY > innerHeight * CONFIG.triggerScrollThresholdVH; }
+  let hasTriggered = false; function shouldTrigger(){ return scrollY > innerHeight * CONFIG.triggerScrollThresholdVH; }
   async function maybeTrigger(){ if (hasTriggered) return; if (!shouldTrigger()) return; hasTriggered = true; const msg = await fetchPitch(); await say(msg); }
   addEventListener('scroll', maybeTrigger, { passive:true });
   addEventListener('load', () => { applyInitialPosition(); setTimeout(maybeTrigger, 1200); startDrift(); });
@@ -378,3 +357,39 @@
     setPosition: (top, left) => { setLauncherPosition({ top, left }); persistPosition(); }
   };
 })();
+
+
+// ==============================
+// FILE 2/2 — Cloudflare Worker: qta-tts-proxy-elevenlabs.js (unchanged API)
+// Route: POST /tts { text, voice, model, instruction }
+// Make sure to set the secret: ELEVEN_API_KEY
+// ==============================
+export default {
+  async fetch(request, env) {
+    const url = new URL(request.url);
+    if (request.method === 'OPTIONS') return cors(new Response(null, { headers: preflightHeaders(request) }));
+    if (request.method !== 'POST' || url.pathname !== '/tts') return cors(new Response('Not Found', { status: 404 }));
+
+    try {
+      const { text, voice, model, instruction } = await request.json();
+      if (!text || !text.trim()) return cors(new Response('Missing text', { status: 400 }));
+
+      const prompt = instruction ? `${instruction}\n\n${text}` : text;
+      const body = { text: prompt, model_id: model || 'eleven_flash_v2', voice_settings: { stability: 0.35, similarity_boost: 0.8, style: 0.7, use_speaker_boost: true }, output_format: 'mp3_44100_128' };
+
+      const apiUrl = `https://api.elevenlabs.io/v1/text-to-speech/${voice || 'cgSgspJ2msm6clMCkdW9'}`;
+      const r = await fetch(apiUrl, { method: 'POST', headers: { 'xi-api-key': env.ELEVEN_API_KEY, 'Content-Type': 'application/json', 'Accept': 'audio/mpeg' }, body: JSON.stringify(body) });
+      if (!r.ok) { const errTxt = await r.text(); return cors(new Response(errTxt || 'TTS error', { status: r.status })); }
+
+      const audio = await r.arrayBuffer();
+      return cors(new Response(audio, { status: 200, headers: { 'Content-Type': 'audio/mpeg', 'Cache-Control': 'no-store' } }));
+    } catch (e) { return cors(new Response('Bad Request', { status: 400 })); }
+  }
+}
+
+function preflightHeaders(req){
+  const reqHdr = req.headers.get('Access-Control-Request-Headers') || '*';
+  const origin = req.headers.get('Origin') || '*';
+  return { 'Access-Control-Allow-Origin': origin, 'Access-Control-Allow-Methods': 'POST, OPTIONS', 'Access-Control-Allow-Headers': reqHdr, 'Access-Control-Max-Age': '86400' };
+}
+function cors(res){ res.headers.set('Access-Control-Allow-Origin', '*'); return res; }
