@@ -2,7 +2,7 @@
   if (window.__qtaWidgetLoaded) return; window.__qtaWidgetLoaded = true;
 
   const CONFIG = {
-    OPENAI_PROXY_URL: 'https://qta-openai.lucky-limit-b037.workers.dev/', // LLM proxy (unchanged)
+    OPENAI_PROXY_URL: 'https://qta-openai.lucky-limit-b037.workers.dev/',
     model: 'gpt-4o-mini',
 
     // ---- UI / behavior ----
@@ -14,7 +14,7 @@
     triggerScrollThresholdVH: 0.7,
 
     // Default position (center-right). Can be overridden by persisted position.
-    initial: { top: 0.5, left: null, right: 18 }, // top as fraction of viewport height
+    initial: { top: 0.5, right: 18 },
 
     // Intro text limits
     introMaxSentences: 2,
@@ -25,16 +25,20 @@
       'You are a concise, friendly sales agent for Quantackle. The site offers AI automation audits and implementation. ' +
       'Write a VERY SHORT pitch (1–3 lines, under ~20s aloud). Focus on identifying 2–3 tasks that unlock 30–40% efficiency/savings ' +
       '(e.g., lead triage, weekly reporting, invoice follow-ups). Avoid fluff. Use confident, helpful tone.',
+    examplesPrompt:
+      'Give 3 short, concrete example prompts a site visitor might click. Each 6–10 words. Start each line with a • bullet. No numbering.',
     fallbackPitch:
       'Quick tip: An AI Automation Audit often surfaces 2–3 high-impact tasks—lead triage, weekly reporting, invoice follow-ups—\n' +
       'that deliver **30–40% time savings** within weeks. Want examples?',
 
-    // ---- TTS provider selection ----
-    // 'webspeech' uses the built-in browser TTS (no keys required).
-    // 'proxy-tts' expects your proxy to return audio (audio/mpeg|audio/wav) for a given text.
-    ttsProvider: 'webspeech', // 'webspeech' | 'proxy-tts'
-    TTS_PROXY_URL: '',        // e.g., your Cloudflare Worker that calls ElevenLabs/Azure/OpenAI TTS and returns raw audio
-    ttsVoice: 'en-US',        // provider-specific; for webspeech this is just language
+    // ---- TTS (ElevenLabs via proxy) ----
+    ttsProvider: 'proxy-tts', // 'webspeech' | 'proxy-tts'
+    TTS_PROXY_URL: 'https://eleven-labs.lucky-limit-b037.workers.dev/', // Cloudflare Worker from File 2
+    ttsVoice: 'cgSgspJ2msm6clMCkdW9', // Jessica
+    eleven: {
+      model: 'eleven_flash_v2',
+      instruction: 'Deliver like an engaging human: light interjections (well, hmm, okay), subtle breath sounds, dynamic pauses, varied pace and pitch. Keep it professional, friendly, confident.'
+    }
   };
 
   // ---------------- Styles ----------------
@@ -43,36 +47,38 @@
   .qta-hidden{display:none!important}
   #qta-widget{position:fixed;inset:0;pointer-events:none;z-index:2147483647;font-family:ui-sans-serif,system-ui,Segoe UI,Roboto,Inter,Arial,sans-serif;color:var(--qta-primary)}
 
-  /* Launcher itself is fixed and draggable */
-  #qta-launcher{position:fixed; width:68px;height:68px;border-radius:16px;background:var(--qta-glass);backdrop-filter:blur(8px);box-shadow:var(--qta-shadow);display:grid;place-items:center;cursor:grab;transition:transform .2s;contain:layout; pointer-events:auto}
+  /* Launcher */
+  #qta-launcher{position:fixed; width:68px;height:68px;border-radius:16px;background:var(--qta-glass);backdrop-filter:blur(8px);box-shadow:var(--qta-shadow);display:grid;place-items:center;cursor:grab;transition:box-shadow .2s;contain:layout; pointer-events:auto}
   #qta-launcher:active{cursor:grabbing}
   #qta-bot{width:44px;height:44px;display:block}
   .qta-eye{transform-origin:center;animation:qta-blink 6s infinite}
   @keyframes qta-blink{0%,97%,100%{transform:scaleY(1)}98%,99%{transform:scaleY(.1)}}
 
-  /* Bubble is semi-transparent like the bot */
-  #qta-bubble{position:fixed;max-width:360px;background:var(--qta-glass);backdrop-filter:blur(8px);border:1px solid rgba(0,0,0,.06);border-radius:14px;padding:12px 14px 10px;box-shadow:var(--qta-shadow); pointer-events:auto}
-  #qta-bubble-header{display:flex;align-items:center;gap:8px;margin-bottom:6px;font-weight:650;letter-spacing:.2px}
-  #qta-close-session{margin-left:auto;background:transparent;border:none;font-size:18px;cursor:pointer;line-height:1}
-  #qta-typing{line-height:1.45;word-wrap:break-word}
-  #qta-caret{display:inline-block;width:8px;height:16px;margin-left:1px;background:#9ca3af;vertical-align:-2px;animation:qta-blink-c 1s steps(2, jump-none) infinite}
+  /* Bubble (50% smaller font, wider max width, semi-transparent) */
+  #qta-bubble{position:fixed;min-width:240px;max-width:min(520px,86vw);background:var(--qta-glass);backdrop-filter:blur(8px);border:1px solid rgba(0,0,0,.06);border-radius:14px;padding:8px 10px;box-shadow:var(--qta-shadow); pointer-events:auto}
+  #qta-bubble *{font-size:11px}
+  #qta-bubble-header{display:flex;align-items:center;gap:8px;margin-bottom:4px;font-weight:650;letter-spacing:.2px}
+  #qta-close-session{margin-left:auto;background:transparent;border:none;font-size:14px;cursor:pointer;line-height:1}
+  #qta-typing{line-height:1.3;word-wrap:break-word;word-break:break-word}
+  #qta-caret{display:inline-block;width:6px;height:12px;margin-left:1px;background:#9ca3af;vertical-align:-1px;animation:qta-blink-c 1s steps(2, jump-none) infinite}
   @keyframes qta-blink-c{0%,49%{opacity:1}50%,100%{opacity:0}}
-  #qta-actions{display:flex;gap:8px;margin-top:10px;align-items:center;flex-wrap:wrap}
-  .qta-btn{border:none;border-radius:10px;padding:8px 10px;cursor:pointer;font-weight:600;font-size:12.5px;box-shadow:0 2px 10px rgba(0,0,0,.05)}
-  .qta-btn-ghost{background:rgba(243,244,246,.8);color:#111827}
+  #qta-actions{display:flex;gap:6px;margin-top:8px;align-items:center;flex-wrap:wrap}
+  .qta-btn{border:none;border-radius:9px;padding:6px 8px;cursor:pointer;font-weight:600;font-size:11px;box-shadow:0 2px 10px rgba(0,0,0,.05)}
+  .qta-btn-ghost{background:rgba(243,244,246,.85);color:#111827}
   .qta-btn-primary{background:var(--qta-accent);color:#fff}
-  .qta-vol{appearance:none;height:4px;border-radius:999px;background:#e5e7eb;outline:none;width:90px}
-  .qta-vol::-webkit-slider-thumb{appearance:none;width:14px;height:14px;border-radius:50%;background:var(--qta-accent)}
+  .qta-vol{appearance:none;height:3px;border-radius:999px;background:#e5e7eb;outline:none;width:90px}
+  .qta-vol::-webkit-slider-thumb{appearance:none;width:12px;height:12px;border-radius:50%;background:var(--qta-accent)}
 
   #qta-panel{position:fixed;right:18px;bottom:96px;width:380px;max-width:86vw;background:var(--qta-glass);backdrop-filter:blur(8px);border-radius:16px;box-shadow:var(--qta-shadow);border:1px solid rgba(0,0,0,.06);overflow:hidden;display:none; pointer-events:auto}
-  #qta-panel header{display:flex;align-items:center;justify-content:space-between;padding:10px 12px;background:rgba(248,250,252,.7);border-bottom:1px solid rgba(0,0,0,.06);font-weight:650}
-  #qta-panel main{padding:12px}
+  #qta-panel header{display:flex;align-items:center;justify-content:space-between;padding:8px 10px;background:rgba(248,250,252,.7);border-bottom:1px solid rgba(0,0,0,.06);font-weight:650}
+  #qta-panel main{padding:10px}
 
   @media (max-width: 640px){
     #qta-launcher{width:56px;height:56px;border-radius:14px}
     #qta-bot{width:34px;height:34px}
-    #qta-bubble{max-width:78vw;padding:10px}
-    #qta-typing{font-size:14px}
+    #qta-bubble{min-width:200px;max-width:86vw;padding:8px}
+    #qta-bubble *{font-size:10px}
+    #qta-typing{font-size:10px}
     #qta-panel{right:12px;bottom:80px;width:92vw}
   }
   `;
@@ -139,51 +145,39 @@
   let driftTimer = null;
   let dragging = false;
   let dragOffset = { x: 0, y: 0 };
-  let anchor = { x: 0, y: 0 }; // micro drift around the current fixed position
 
   volumeSlider.value = String(volume);
   updateMuteUI();
 
-  // -------------- Positioning --------------
+  // -------------- Positioning (left/top only; keeps bubble glued) --------------
   const savedPos = JSON.parse(localStorage.getItem('qta_pos') || 'null');
   function applyInitialPosition(){
-    let topPx, leftPx, rightPx;
+    let topPx, leftPx;
     if (savedPos) {
-      topPx = savedPos.top; leftPx = savedPos.left; rightPx = savedPos.right;
+      topPx = savedPos.top; leftPx = savedPos.left;
     } else {
-      const vh = window.innerHeight;
-      topPx = Math.round(vh * CONFIG.initial.top - 34); // center by half height
-      leftPx = null; rightPx = CONFIG.initial.right;
+      const vh = window.innerHeight; const vw = window.innerWidth;
+      topPx = Math.round(vh * CONFIG.initial.top - 34); // center by half launcher height
+      leftPx = vw - CONFIG.initial.right - 68; // convert right→left once; we only use left/top afterward
     }
-    setLauncherPosition({ top: topPx, left: leftPx, right: rightPx });
+    setLauncherPosition({ top: topPx, left: leftPx });
   }
-  function setLauncherPosition({ top, left, right }){
+  function setLauncherPosition({ top, left }){
     if (typeof top === 'number') launcher.style.top = `${Math.max(10, Math.min(window.innerHeight - launcher.offsetHeight - 10, top))}px`;
-    if (left == null) {
-      launcher.style.left = '';
-    } else {
-      launcher.style.left = `${Math.max(10, Math.min(window.innerWidth - launcher.offsetWidth - 10, left))}px`;
-    }
-    if (right == null) {
-      launcher.style.right = '';
-    } else {
-      launcher.style.right = `${right}px`;
-    }
+    if (typeof left === 'number') launcher.style.left = `${Math.max(10, Math.min(window.innerWidth - launcher.offsetWidth - 10, left))}px`;
+    launcher.style.right = '';
+    ensureBubbleAnchor();
   }
   function persistPosition(){
     const styleTop = parseFloat(launcher.style.top || '0');
     const styleLeft = launcher.style.left ? parseFloat(launcher.style.left) : null;
-    const styleRight = launcher.style.right ? parseFloat(launcher.style.right) : null;
-    localStorage.setItem('qta_pos', JSON.stringify({ top: styleTop, left: styleLeft, right: styleRight }));
+    localStorage.setItem('qta_pos', JSON.stringify({ top: styleTop, left: styleLeft }));
   }
 
   // -------------- Events --------------
   panelClose.addEventListener('click', () => panel.style.display = 'none');
-  launcher.addEventListener('click', (e) => {
-    if (dragging) return; // ignore click after drag
-    panel.style.display = (panel.style.display === 'block') ? 'none' : 'block';
-  });
-  examplesBtn.addEventListener('click', () => { openPanel(); panelContent.innerHTML = renderExamples(); });
+  launcher.addEventListener('click', (e) => { if (dragging) return; panel.style.display = (panel.style.display === 'block') ? 'none' : 'block'; });
+  examplesBtn.addEventListener('click', handleExamplesClick);
   moreBtn.addEventListener('click', async () => { await say(await fetchPitch({ more:true })); });
   closeSessionBtn.addEventListener('click', () => { sessionStorage.setItem('qta_closed_session','1'); cleanupSpeech(); hideAll(); });
   muteBtn.addEventListener('click', toggleMute);
@@ -201,17 +195,13 @@
     if (!dragging) return;
     const nx = Math.max(10, Math.min(window.innerWidth - launcher.offsetWidth - 10, e.clientX - dragOffset.x));
     const ny = Math.max(10, Math.min(window.innerHeight - launcher.offsetHeight - 10, e.clientY - dragOffset.y));
-    launcher.style.left = `${nx}px`;
-    launcher.style.top = `${ny}px`;
-    launcher.style.right = '';
-    anchor = { x: 0, y: 0 };
-    ensureBubbleInView();
+    launcher.style.left = `${nx}px`; launcher.style.top = `${ny}px`;
+    ensureBubbleAnchor();
   }, { passive: true });
   window.addEventListener('pointerup', (e) => {
     if (!dragging) return;
     dragging = false; launcher.releasePointerCapture?.(e.pointerId);
-    persistPosition();
-    startDrift();
+    persistPosition(); startDrift();
   });
 
   function toggleMute(){ isMuted = !isMuted; localStorage.setItem('qta_muted', isMuted ? '1' : '0'); updateMuteUI(); if (isMuted) cleanupSpeech(); }
@@ -219,11 +209,17 @@
   function openPanel(){ panel.style.display = 'block'; }
   function hideAll(){ bubble.classList.add('qta-hidden'); panel.style.display='none'; }
 
-  // ------- Subtle drift (idle only) -------
-  function startDrift(){ if (!CONFIG.driftWhenIdle || driftTimer) return; driftTimer = setInterval(()=>{ if (isSpeaking || dragging) return; const dx=(Math.random()*2-1)*CONFIG.driftRadius; const dy=(Math.random()*2-1)*CONFIG.driftRadius; anchor.x = Math.max(-12, Math.min(12, anchor.x+dx)); anchor.y = Math.max(-12, Math.min(12, anchor.y+dy)); launcher.style.transform = `translate(${anchor.x}px, ${anchor.y}px)`; ensureBubbleInView(); }, CONFIG.driftEveryMs); }
-  function stopDrift(){ if (driftTimer){ clearInterval(driftTimer); driftTimer=null; } launcher.style.transform = 'translate(0,0)'; }
+  // ------- Subtle drift (left/top; keeps bubble glued) -------
+  function startDrift(){ if (!CONFIG.driftWhenIdle || driftTimer) return; driftTimer = setInterval(()=>{
+    if (isSpeaking || dragging) return;
+    const rect = launcher.getBoundingClientRect();
+    const dx=(Math.random()*2-1)*CONFIG.driftRadius; const dy=(Math.random()*2-1)*CONFIG.driftRadius;
+    setLauncherPosition({ top: rect.top + dy, left: rect.left + dx });
+    ensureBubbleAnchor();
+  }, CONFIG.driftEveryMs); }
+  function stopDrift(){ if (driftTimer){ clearInterval(driftTimer); driftTimer=null; } }
 
-  // ------- Fetch pitch (intro or more) -------
+  // ------- Fetch pitch / examples -------
   async function fetchPitch(opts={}){
     const context = (document.querySelector('main')?.innerText || document.body.innerText || '').slice(0, 1600);
     const modePrompt = opts.more ? 'Give one short follow-up (1–2 sentences) with concrete examples tailored to the context. Keep it brief.' : CONFIG.systemPrompt;
@@ -238,6 +234,30 @@
     } catch(e){ return opts.more ? 'For example: lead triage, reporting, invoice nudges. Want a 10-min audit call?' : CONFIG.fallbackPitch; }
   }
 
+  async function fetchExamples(){
+    const context = (document.querySelector('main')?.innerText || document.body.innerText || '').slice(0, 1600);
+    try {
+      const res = await fetch(CONFIG.OPENAI_PROXY_URL, {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ model: CONFIG.model, messages:[ {role:'system', content: CONFIG.examplesPrompt}, {role:'user', content:`Tailor to this page context.\n\n${context}`} ], max_tokens: 120 })
+      });
+      const data = await res.json();
+      return (data && data.content) || '• Show a 4-week automation plan\n• Estimate ROI from AI audit\n• What can you automate first?';
+    } catch(e){ return '• Lead triage with enrichment\n• Auto-build monthly reports\n• Invoice reminders that work'; }
+  }
+
+  function renderExamples(list){
+    const html = list.split(/\n+/).map(line => `<div>${line}</div>`).join('');
+    return `<div style="display:flex;flex-direction:column;gap:6px;line-height:1.35">${html}</div>`;
+  }
+
+  async function handleExamplesClick(){
+    openPanel();
+    panelContent.innerHTML = '<div style="opacity:.7">Generating examples…</div>';
+    const list = await fetchExamples();
+    panelContent.innerHTML = renderExamples(list);
+  }
+
   function clipIntro(text){
     text = String(text || '').replace(/\s+/g,' ').trim();
     const sentences = text.match(/[^.!?]+[.!?]?/g) || [text];
@@ -247,13 +267,15 @@
     return out;
   }
 
-  // ------- TTS: webspeech or proxy -------
+  // ------- TTS: ElevenLabs via proxy OR fallback to Web Speech -------
   async function speak(text){
     if (!CONFIG.enableVoice || isMuted) return null;
     if (CONFIG.ttsProvider === 'proxy-tts' && CONFIG.TTS_PROXY_URL) {
       try {
-        const controller = new AbortController();
-        const res = await fetch(CONFIG.TTS_PROXY_URL, { method: 'POST', body: JSON.stringify({ text, voice: CONFIG.ttsVoice }), headers: { 'Content-Type': 'application/json' }, signal: controller.signal });
+        const res = await fetch(CONFIG.TTS_PROXY_URL, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text, voice: CONFIG.ttsVoice, model: CONFIG.eleven.model, instruction: CONFIG.eleven.instruction })
+        });
         if (!res.ok) throw new Error('Bad TTS response');
         const type = res.headers.get('Content-Type') || 'audio/mpeg';
         const buf = await res.arrayBuffer();
@@ -263,12 +285,12 @@
         audio.volume = Math.max(0, Math.min(1, volume));
         await audio.play();
         return { stop: () => { try { audio.pause(); audio.currentTime = 1e9; } catch {} URL.revokeObjectURL(url); } };
-      } catch (e) { /* fall back */ }
+      } catch (e) { /* fall through to webspeech */ }
     }
 
     if (!('speechSynthesis' in window)) return null;
     const u = new SpeechSynthesisUtterance(text.replace(/[*_`]/g,''));
-    u.rate = 1.02; u.pitch = 1; u.lang = CONFIG.ttsVoice || 'en-US'; u.volume = Math.max(0, Math.min(1, volume));
+    u.rate = 1.02; u.pitch = 1; u.lang = 'en-US'; u.volume = Math.max(0, Math.min(1, volume));
     speechSynthesis.cancel();
     speechSynthesis.speak(u);
     return { stop: () => { try { speechSynthesis.cancel(); } catch {} } };
@@ -276,9 +298,8 @@
 
   // ------- Speak & Type (synced) -------
   async function say(text){
-    // Always show bubble and sync with speech
     bubble.classList.remove('qta-hidden');
-    ensureBubbleInView();
+    ensureBubbleAnchor();
     typingEl.textContent = '';
     stopDrift();
     setSpeaking(true);
@@ -286,24 +307,22 @@
     const caret = document.createElement('span'); caret.id='qta-caret'; typingEl.appendChild(caret);
     let typedLen = 0; let boundarySeen = false; let fallbackTimer = null; let mouthTimer = null; let speaker = null;
 
-    function typeTo(idx){ if (idx<=typedLen) return; typingEl.textContent = text.slice(0, idx); typingEl.appendChild(caret); typedLen = idx; ensureBubbleInView(); }
+    function typeTo(idx){ if (idx<=typedLen) return; typingEl.textContent = text.slice(0, idx); typingEl.appendChild(caret); typedLen = idx; ensureBubbleAnchor(); }
     function pulseMouth(){ mouth.setAttribute('d', 'M 22 39 Q 32 45 42 39'); setTimeout(()=> mouth.setAttribute('d', 'M 22 39 Q 32 42 42 39'), 120); }
 
     try {
-      // Start speech (webspeech or proxy)
-      if (CONFIG.ttsProvider === 'webspeech' && 'onboundary' in SpeechSynthesisUtterance.prototype) {
+      if ('speechSynthesis' in window && 'onboundary' in SpeechSynthesisUtterance.prototype && CONFIG.ttsProvider !== 'proxy-tts') {
         const u = new SpeechSynthesisUtterance(text.replace(/[*_`]/g,''));
-        u.rate = 1.02; u.pitch = 1; u.lang = CONFIG.ttsVoice || 'en-US'; u.volume = Math.max(0, Math.min(1, volume));
+        u.rate = 1.02; u.pitch = 1; u.lang = 'en-US'; u.volume = Math.max(0, Math.min(1, volume));
         u.onboundary = (e)=>{ boundarySeen=true; const idx = e.charIndex || 0; typeTo(idx); pulseMouth(); };
         u.onstart = ()=>{ fallbackTimer = setTimeout(()=>{ if (!boundarySeen){ timedFallbackType(text, typeTo); } }, 300); mouthTimer = setInterval(pulseMouth, 420); };
         u.onend = ()=>{ if (fallbackTimer) clearTimeout(fallbackTimer); if (mouthTimer) clearInterval(mouthTimer); finish(); };
         speechSynthesis.cancel(); speechSynthesis.speak(u);
       } else {
-        // Proxy TTS (or webspeech without boundary events) → manual type cadence
+        // Proxy TTS (or browsers w/o boundary events) → manual type cadence
         speaker = await speak(text);
         fallbackTimer = timedFallbackType(text, typeTo);
         mouthTimer = setInterval(pulseMouth, 420);
-        // naive duration estimate; stop typing when text ends
         const estimatedMs = Math.max(3000, Math.min(15000, text.split(/\s+/).length * 350));
         setTimeout(()=>{ clearInterval(mouthTimer); finish(); }, estimatedMs);
       }
@@ -315,33 +334,33 @@
   }
 
   function timedFallbackType(text, typeTo){
-    const chunk = 3; let i = 0; const ms = Math.max(14, Math.floor(7000 / Math.max(40, text.length)));
+    const chunk = 3; let i = 0; const ms = Math.max(12, Math.floor(6000 / Math.max(40, text.length)));
     const t = setInterval(()=>{ i = Math.min(text.length, i+chunk); typeTo(i); if (i>=text.length) clearInterval(t); }, ms);
     return t;
   }
 
-  async function typeOnly(text){ const chunk=3; for(let i=0;i<text.length;i+=chunk){ typingEl.textContent += text.slice(i,i+chunk); await sleep(18); ensureBubbleInView(); } }
+  async function typeOnly(text){ const chunk=3; for(let i=0;i<text.length;i+=chunk){ typingEl.textContent += text.slice(i,i+chunk); await sleep(16); ensureBubbleAnchor(); } }
   function sleep(ms){ return new Promise(r=>setTimeout(r,ms)); }
 
   function setSpeaking(v){ isSpeaking = !!v; if (v) stopDrift(); }
   function cleanupSpeech(){ try{ speechSynthesis.cancel(); }catch{} setSpeaking(false); mouth.setAttribute('d', initialMouthD); }
 
-  // ------- Bubble positioning (always in viewport) -------
-  function ensureBubbleInView(){
+  // ------- Bubble anchoring to bot -------
+  function ensureBubbleAnchor(){
     const lRect = launcher.getBoundingClientRect();
     const bRect = bubble.getBoundingClientRect();
     const vw = window.innerWidth, vh = window.innerHeight;
     let sideRight = true;
-    if (lRect.right + 16 + bRect.width > vw) sideRight = false;
+    if (lRect.right + 12 + bRect.width > vw) sideRight = false;
     let top = lRect.top + lRect.height/2 - bRect.height/2;
     if (top + bRect.height > vh - 10) top = vh - bRect.height - 10;
     if (top < 10) top = 10;
-    const left = sideRight ? (lRect.right + 12) : (lRect.left - bRect.width - 12);
+    const left = sideRight ? (lRect.right + 10) : (lRect.left - bRect.width - 10);
     bubble.style.top = `${Math.max(10, top)}px`;
     bubble.style.left = `${Math.max(10, Math.min(vw - bRect.width - 10, left))}px`;
   }
-  window.addEventListener('resize', ensureBubbleInView, { passive:true });
-  window.addEventListener('scroll', ensureBubbleInView, { passive:true });
+  window.addEventListener('resize', ensureBubbleAnchor, { passive:true });
+  window.addEventListener('scroll', ensureBubbleAnchor, { passive:true });
 
   // ------- Trigger after hero -------
   let hasTriggered = false;
@@ -356,21 +375,6 @@
     say: async (t) => say(t),
     mute: () => { if (!isMuted){ toggleMute(); } },
     unmute: () => { if (isMuted){ toggleMute(); } },
-    setPosition: (top, left) => { setLauncherPosition({ top, left, right: null }); persistPosition(); }
+    setPosition: (top, left) => { setLauncherPosition({ top, left }); persistPosition(); }
   };
-
-  function renderExamples(){
-    return `
-      <div style="display:flex;flex-direction:column;gap:8px;font-size:14px;line-height:1.45">
-        <div><strong>High-impact tasks we automate</strong></div>
-        <ul style="margin:0 0 8px 18px;padding:0">
-          <li>Lead triage & enrichment → instant routing, fewer misses</li>
-          <li>Monthly reporting → auto-built decks from your data</li>
-          <li>Invoice & follow-ups → scheduled nudges, faster cash cycle</li>
-        </ul>
-        <div style="background:rgba(248,250,252,.7);border:1px solid #e5e7eb;border-radius:10px;padding:8px 10px">
-          Typical outcome: <strong>30–40% time saved</strong> for ops/sales within 4–6 weeks.
-        </div>
-      </div>`;
-  }
 })();
