@@ -358,38 +358,5 @@
   };
 })();
 
-
-// ==============================
-// FILE 2/2 — Cloudflare Worker: qta-tts-proxy-elevenlabs.js (unchanged API)
-// Route: POST /tts { text, voice, model, instruction }
-// Make sure to set the secret: ELEVEN_API_KEY
-// ==============================
-export default {
-  async fetch(request, env) {
-    const url = new URL(request.url);
-    if (request.method === 'OPTIONS') return cors(new Response(null, { headers: preflightHeaders(request) }));
-    if (request.method !== 'POST' || url.pathname !== '/tts') return cors(new Response('Not Found', { status: 404 }));
-
-    try {
-      const { text, voice, model, instruction } = await request.json();
-      if (!text || !text.trim()) return cors(new Response('Missing text', { status: 400 }));
-
-      const prompt = instruction ? `${instruction}\n\n${text}` : text;
-      const body = { text: prompt, model_id: model || 'eleven_flash_v2', voice_settings: { stability: 0.35, similarity_boost: 0.8, style: 0.7, use_speaker_boost: true }, output_format: 'mp3_44100_128' };
-
-      const apiUrl = `https://api.elevenlabs.io/v1/text-to-speech/${voice || 'cgSgspJ2msm6clMCkdW9'}`;
-      const r = await fetch(apiUrl, { method: 'POST', headers: { 'xi-api-key': env.ELEVEN_API_KEY, 'Content-Type': 'application/json', 'Accept': 'audio/mpeg' }, body: JSON.stringify(body) });
-      if (!r.ok) { const errTxt = await r.text(); return cors(new Response(errTxt || 'TTS error', { status: r.status })); }
-
-      const audio = await r.arrayBuffer();
-      return cors(new Response(audio, { status: 200, headers: { 'Content-Type': 'audio/mpeg', 'Cache-Control': 'no-store' } }));
-    } catch (e) { return cors(new Response('Bad Request', { status: 400 })); }
-  }
-}
-
-function preflightHeaders(req){
-  const reqHdr = req.headers.get('Access-Control-Request-Headers') || '*';
-  const origin = req.headers.get('Origin') || '*';
-  return { 'Access-Control-Allow-Origin': origin, 'Access-Control-Allow-Methods': 'POST, OPTIONS', 'Access-Control-Allow-Headers': reqHdr, 'Access-Control-Max-Age': '86400' };
 }
 function cors(res){ res.headers.set('Access-Control-Allow-Origin', '*'); return res; }
