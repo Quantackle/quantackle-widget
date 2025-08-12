@@ -357,6 +357,3 @@
     setPosition: (top, left) => { setLauncherPosition({ top, left }); persistPosition(); }
   };
 })();
-
-}
-function cors(res){ res.headers.set('Access-Control-Allow-Origin', '*'); return res; }
