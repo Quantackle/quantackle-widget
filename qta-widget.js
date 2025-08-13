@@ -33,13 +33,9 @@
 
     // ---- TTS (ElevenLabs via proxy) ----
     ttsProvider: 'proxy-tts',
-    // IMPORTANT: must end with /tts (Worker route).
-    TTS_PROXY_URL: 'https://eleven-labs.lucky-limit-b037.workers.dev/tts',
+    TTS_PROXY_URL: 'https://eleven-labs.lucky-limit-b037.workers.dev/tts', // must end with /tts
     ttsVoice: 'cgSgspJ2msm6clMCkdW9', // Jessica
-    eleven: {
-      model: 'eleven_flash_v2',
-      instruction: 'Deliver like an engaging human: light interjections (well, hmm, okay), subtle breath sounds, dynamic pauses, varied pace and pitch. Keep it professional, friendly, confident.'
-    }
+    eleven: { model: 'eleven_flash_v2' }
   };
 
   // ---------------- Styles ----------------
@@ -146,7 +142,7 @@
   let driftTimer = null;
   let dragging = false;
   let dragOffset = { x: 0, y: 0 };
-  let dragBubbleLock = null; // keeps bubble glued during drag
+  let dragBubbleLock = null; // keeps bubble stuck during drag
 
   volumeSlider.value = String(volume);
   updateMuteUI();
@@ -186,10 +182,9 @@
     launcher.setPointerCapture(e.pointerId);
     const rect = launcher.getBoundingClientRect();
     dragOffset.x = e.clientX - rect.left; dragOffset.y = e.clientY - rect.top;
-    // lock bubble offset relative to launcher during drag
     if (!bubble.classList.contains('qta-hidden')) {
-      const l = rect; const b = bubble.getBoundingClientRect();
-      dragBubbleLock = { dx: b.left - l.right, dy: b.top - l.top };
+      const b = bubble.getBoundingClientRect();
+      dragBubbleLock = { offsetX: b.left - rect.left, offsetY: b.top - rect.top };
     } else dragBubbleLock = null;
     ensureBubbleAnchor();
   });
@@ -199,9 +194,9 @@
     const ny = Math.max(10, Math.min(window.innerHeight - launcher.offsetHeight - 10, e.clientY - dragOffset.y));
     launcher.style.left = `${nx}px`; launcher.style.top = `${ny}px`;
     if (dragBubbleLock) {
-      const lRect = launcher.getBoundingClientRect();
-      bubble.style.left = `${lRect.right + dragBubbleLock.dx}px`;
-      bubble.style.top  = `${lRect.top   + dragBubbleLock.dy}px`;
+      const l = launcher.getBoundingClientRect();
+      bubble.style.left = `${l.left + dragBubbleLock.offsetX}px`;
+      bubble.style.top  = `${l.top  + dragBubbleLock.offsetY}px`;
     } else {
       ensureBubbleAnchor();
     }
@@ -273,14 +268,16 @@
     if (!CONFIG.enableVoice || isMuted) return null;
     if (CONFIG.ttsProvider === 'proxy-tts' && CONFIG.TTS_PROXY_URL) {
       try {
-        const res = await fetch(CONFIG.TTS_PROXY_URL, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text, voice: CONFIG.ttsVoice, model: CONFIG.eleven.model, instruction: CONFIG.eleven.instruction }) });
+        const res = await fetch(CONFIG.TTS_PROXY_URL, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text, voice: CONFIG.ttsVoice, model: CONFIG.eleven.model }) });
         if (!res.ok) throw new Error('Bad TTS response');
         const type = res.headers.get('Content-Type') || 'audio/mpeg';
         const buf = await res.arrayBuffer();
         const blob = new Blob([buf], { type });
         const url = URL.createObjectURL(blob);
-        const audio = new Audio(url); audio.volume = Math.max(0, Math.min(1, volume)); await audio.play();
-        return { stop: () => { try { audio.pause(); audio.currentTime = 1e9; } catch {} URL.revokeObjectURL(url); } };
+        const audio = new Audio(url);
+        audio.volume = Math.max(0, Math.min(1, volume));
+        try { await audio.play(); } catch (err) { URL.revokeObjectURL(url); throw err; }
+        return { audio, stop: () => { try { audio.pause(); audio.currentTime = 1e9; } catch {} URL.revokeObjectURL(url); } };
       } catch (e) {
         // fall through to Web Speech
       }
@@ -290,7 +287,7 @@
     const u = new SpeechSynthesisUtterance(text.replace(/[*_`]/g,''));
     u.rate = 1.02; u.pitch = 1; u.lang = 'en-US'; u.volume = Math.max(0, Math.min(1, volume));
     speechSynthesis.cancel(); speechSynthesis.speak(u);
-    return { stop: () => { try { speechSynthesis.cancel(); } catch {} } };
+    return { audio: null, stop: () => { try { speechSynthesis.cancel(); } catch {} } };
   }
 
   // ------- Speak & Type (synced) -------
@@ -299,26 +296,35 @@
     typingEl.textContent = ''; stopDrift(); setSpeaking(true);
 
     const caret = document.createElement('span'); caret.id='qta-caret'; typingEl.appendChild(caret);
-    let typedLen = 0; let boundarySeen = false; let fallbackTimer = null; let mouthTimer = null; let speaker = null;
+    let typedLen = 0; let fallbackTimer = null; let mouthTimer = null; let speaker = null;
 
     function typeTo(idx){ if (idx<=typedLen) return; typingEl.textContent = text.slice(0, idx); typingEl.appendChild(caret); typedLen = idx; if(!dragging) ensureBubbleAnchor(); }
     function pulseMouth(){ mouth.setAttribute('d', 'M 22 39 Q 32 45 42 39'); setTimeout(()=> mouth.setAttribute('d', 'M 22 39 Q 32 42 42 39'), 120); }
 
     try {
-      if ('speechSynthesis' in window && 'onboundary' in SpeechSynthesisUtterance.prototype && CONFIG.ttsProvider !== 'proxy-tts') {
-        const u = new SpeechSynthesisUtterance(text.replace(/[*_`]/g,''));
-        u.rate = 1.02; u.pitch = 1; u.lang = 'en-US'; u.volume = Math.max(0, Math.min(1, volume));
-        u.onboundary = (e)=>{ boundarySeen=true; const idx = e.charIndex || 0; typeTo(idx); pulseMouth(); };
-        u.onstart = ()=>{ fallbackTimer = setTimeout(()=>{ if (!boundarySeen){ timedFallbackType(text, typeTo); } }, 300); mouthTimer = setInterval(pulseMouth, 420); };
-        u.onend = ()=>{ if (fallbackTimer) clearTimeout(fallbackTimer); if (mouthTimer) clearInterval(mouthTimer); finish(); };
-        speechSynthesis.cancel(); speechSynthesis.speak(u);
+      speaker = await speak(text);
+      // Manual type cadence (works for both ElevenLabs and Web Speech fallback)
+      fallbackTimer = timedFallbackType(text, typeTo);
+      mouthTimer = setInterval(pulseMouth, 420);
+      if (speaker?.audio) {
+        speaker.audio.onended = finish;
+        // safety timeout in case ended never fires
+        setTimeout(() => { try { speaker.audio.onended = null; } catch {} finish(); }, 18000);
       } else {
-        speaker = await speak(text); fallbackTimer = timedFallbackType(text, typeTo); mouthTimer = setInterval(pulseMouth, 420);
-        const estimatedMs = Math.max(3000, Math.min(15000, text.split(/\s+/).length * 350)); setTimeout(()=>{ clearInterval(mouthTimer); finish(); }, estimatedMs);
+        // Web Speech: we don't get boundary reliably → estimate duration
+        const estimatedMs = Math.max(2500, Math.min(14000, text.split(/\s+/).length * 320));
+        setTimeout(()=>{ finish(); }, estimatedMs);
       }
-    } catch { await typeOnly(text); finish(); }
+    } catch {
+      await typeOnly(text); finish();
+    }
 
-    function finish(){ typingEl.textContent = text; try{ caret.remove(); }catch{} setSpeaking(false); startDrift(); mouth.setAttribute('d', initialMouthD); speaker?.stop?.(); }
+    function finish(){
+      try { if (fallbackTimer) clearInterval(fallbackTimer); } catch{}
+      try { if (mouthTimer) clearInterval(mouthTimer); } catch{}
+      typingEl.textContent = text; try{ caret.remove(); }catch{}
+      setSpeaking(false); startDrift(); mouth.setAttribute('d', initialMouthD); speaker?.stop?.();
+    }
   }
 
   function timedFallbackType(text, typeTo){ const chunk = 3; let i = 0; const ms = Math.max(12, Math.floor(6000 / Math.max(40, text.length))); const t = setInterval(()=>{ i = Math.min(text.length, i+chunk); typeTo(i); if (i>=text.length) clearInterval(t); }, ms); return t; }
