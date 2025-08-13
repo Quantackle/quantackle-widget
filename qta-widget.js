@@ -170,8 +170,17 @@
   // -------------- Events --------------
   panelClose.addEventListener('click', () => panel.style.display = 'none');
   launcher.addEventListener('click', (e) => { if (dragging) return; panel.style.display = (panel.style.display === 'block') ? 'none' : 'block'; });
-  examplesBtn.addEventListener('click', handleExamplesClick);
-  moreBtn.addEventListener('click', async () => { await say(await fetchPitch({ more:true })); });
+  
+  // --- FIX: Added event propagation stop to prevent launcher's click handler from firing ---
+  examplesBtn.addEventListener('click', (e) => { 
+    e.stopPropagation();
+    handleExamplesClick();
+  });
+  moreBtn.addEventListener('click', async (e) => { 
+    e.stopPropagation();
+    await say(await fetchPitch({ more:true })); 
+  });
+
   closeSessionBtn.addEventListener('click', () => { sessionStorage.setItem('qta_closed_session_v2','1'); cleanupSpeech(); hideAll(); });
   muteBtn.addEventListener('click', toggleMute);
   volumeSlider.addEventListener('input', () => { volume = parseFloat(volumeSlider.value); localStorage.setItem('qta_volume', String(volume)); });
@@ -185,8 +194,10 @@
     if (!bubble.classList.contains('qta-hidden')) {
       const b = bubble.getBoundingClientRect();
       dragBubbleLock = { offsetX: b.left - rect.left, offsetY: b.top - rect.top };
-    } else dragBubbleLock = null;
-    ensureBubbleAnchor();
+    } else {
+      dragBubbleLock = null;
+    }
+    // --- FIX: Removed ensureBubbleAnchor() call that was misaligning the bubble during drag ---
   });
   window.addEventListener('pointermove', (e) => {
     if (!dragging) return;
