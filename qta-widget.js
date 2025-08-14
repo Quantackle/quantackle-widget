@@ -344,24 +344,28 @@
 
   // ------- Bubble anchoring to bot -------
   function ensureBubbleAnchor(){
+    // --- DEBUGGING LOG ---
+    // This will print every time the function is called, and from where.
+    console.log(`[DEBUG] ensureBubbleAnchor called. Dragging status: ${dragging}`);
+  
     // ROBUST FIX: Do not run this logic if the user is actively dragging the element.
-    if (dragging) return;
+    if (dragging) {
+      // --- DEBUGGING LOG ---
+      console.log(`[DEBUG] ANCHOR BLOCKED because dragging is true.`);
+      return;
+    }
     if (bubble.classList.contains('qta-hidden')) return;
-
+  
     const lRect = launcher.getBoundingClientRect();
     const bRect = bubble.getBoundingClientRect();
     const vw = window.innerWidth, vh = window.innerHeight;
-    
-    // Prefer to position bubble on the right side if there's space
+  
     let sideRight = lRect.right + 12 + bRect.width <= vw;
-    let left = sideRight ? (lRect.right + 10) : (lRect.left - bRect.width - 10);
-    
-    // Center vertically, but clamp to viewport edges
     let top = lRect.top + lRect.height/2 - bRect.height/2;
-    top = Math.max(10, Math.min(top, vh - bRect.height - 10));
-
-    bubble.style.top = `${top}px`; 
-    bubble.style.left = `${left}px`;
+    if (top + bRect.height > vh - 10) top = vh - bRect.height - 10; if (top < 10) top = 10;
+    const left = sideRight ? (lRect.right + 10) : (lRect.left - bRect.width - 10);
+    bubble.style.top = `${Math.max(10, top)}px`;
+    bubble.style.left = `${Math.max(10, Math.min(vw - bRect.width - 10, left))}px`;
   }
   window.addEventListener('resize', ensureBubbleAnchor, { passive:true });
   window.addEventListener('scroll', ensureBubbleAnchor, { passive:true });
