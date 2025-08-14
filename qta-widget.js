@@ -8,9 +8,6 @@
     // ---- UI / behavior ----
     enableVoice: true,
     defaultVolume: 0.9,
-    driftWhenIdle: true,
-    driftRadius: 8,
-    driftEveryMs: 1800,
     triggerScrollThresholdVH: 0.7,
 
     // Default position (center-right). Can be overridden by persisted position.
@@ -84,6 +81,7 @@
   if (sessionStorage.getItem('qta_closed_session_v2') === '1') return;
 
   // ---------------- DOM ----------------
+  // The launcher and bubble are now siblings for cleaner event handling.
   const root = document.createElement('div'); root.id = 'qta-widget';
   root.innerHTML = `
     <div id="qta-panel" role="dialog" aria-label="Quantackle Sales Assistant">
@@ -102,19 +100,19 @@
         <path class="qta-mouth" d="M 22 39 Q 32 42 42 39" stroke="#e5e7eb" stroke-width="2" fill="none"/>
         <rect x="29" y="8" width="6" height="8" rx="3" fill="#111827"/>
       </svg>
+    </div>
 
-      <div id="qta-bubble" class="qta-hidden" role="status">
-        <div id="qta-bubble-header">
-          <span>🤖 Quantackle Assistant</span>
-          <button id="qta-close-session" title="Close for this session">✕</button>
-        </div>
-        <div id="qta-typing" aria-live="polite"></div>
-        <div id="qta-actions">
-          <input id="qta-volume" class="qta-vol" type="range" min="0" max="1" step="0.05" />
-          <button id="qta-examples" class="qta-btn qta-btn-ghost">Show Examples</button>
-          <button id="qta-more" class="qta-btn qta-btn-primary">Hear More</button>
-          <button id="qta-mute" class="qta-btn qta-btn-ghost">Mute</button>
-        </div>
+    <div id="qta-bubble" class="qta-hidden" role="status">
+      <div id="qta-bubble-header">
+        <span>🤖 Quantackle Assistant</span>
+        <button id="qta-close-session" title="Close for this session">✕</button>
+      </div>
+      <div id="qta-typing" aria-live="polite"></div>
+      <div id="qta-actions">
+        <input id="qta-volume" class="qta-vol" type="range" min="0" max="1" step="0.05" />
+        <button id="qta-examples" class="qta-btn qta-btn-ghost">Show Examples</button>
+        <button id="qta-more" class="qta-btn qta-btn-primary">Hear More</button>
+        <button id="qta-mute" class="qta-btn qta-btn-ghost">Mute</button>
       </div>
     </div>
   `;
@@ -139,7 +137,6 @@
   let isMuted = localStorage.getItem('qta_muted') === '1';
   let volume = parseFloat(localStorage.getItem('qta_volume') || CONFIG.defaultVolume);
   let isSpeaking = false;
-  let driftTimer = null;
   let dragging = false;
   let dragOffset = { x: 0, y: 0 };
   let dragBubbleLock = null;
@@ -169,39 +166,35 @@
 
   // -------------- Events --------------
   panelClose.addEventListener('click', () => panel.style.display = 'none');
-  launcher.addEventListener('click', (e) => {
-  // --- DEBUGGING LOG ---
-  console.log("[DEBUG] LAUNCHER click handler fired.");
-  if (dragging) return;
-  panel.style.display = (panel.style.display === 'block') ? 'none' : 'block';
-  });
+  launcher.addEventListener('click', (e) => { if (dragging) return; panel.style.display = (panel.style.display === 'block') ? 'none' : 'block'; });
   
-  // ROBUST FIX: Stop click from bubbling up to the launcher.
-  examplesBtn.addEventListener('click', (e) => {
-  // --- DEBUGGING LOG ---
-  console.log("[DEBUG] EXAMPLES button clicked.");
-  e.stopPropagation();
-  handleExamplesClick();
+  examplesBtn.addEventListener('click', (e) => { 
+    e.stopPropagation(); // Good practice, though fix is in pointerdown
+    handleExamplesClick();
   });
-  moreBtn.addEventListener('click', async (e) => {
-  // --- DEBUGGING LOG ---
-  console.log("[DEBUG] MORE button clicked.");
-  e.stopPropagation();
-  await say(await fetchPitch({ more:true }));
+  moreBtn.addEventListener('click', async (e) => { 
+    e.stopPropagation(); // Good practice
+    await say(await fetchPitch({ more:true })); 
   });
-
-  closeSessionBtn.addEventListener('click', (e) => { e.stopPropagation(); sessionStorage.setItem('qta_closed_session_v2','1'); cleanupSpeech(); hideAll(); });
-  muteBtn.addEventListener('click', (e) => { e.stopPropagation(); toggleMute(); });
-  volumeSlider.addEventListener('input', (e) => e.stopPropagation());
+  closeSessionBtn.addEventListener('click', () => { sessionStorage.setItem('qta_closed_session_v2','1'); cleanupSpeech(); hideAll(); });
+  muteBtn.addEventListener('click', toggleMute);
+  volumeSlider.addEventListener('input', () => { volume = parseFloat(volumeSlider.value); localStorage.setItem('qta_volume', String(volume)); });
 
   // Drag logic
   launcher.addEventListener('pointerdown', (e) => {
-    // Only drag with the main (left) mouse button
+    // THIS IS THE FIX: Ignore clicks that are not on the bot icon itself.
+    // This allows clicks on the bubble/buttons to pass through without starting a drag.
+    if (e.target.closest('#qta-bubble')) {
+        return;
+    }
+    
     if (e.button !== 0) return;
-    dragging = true; stopDrift(); setSpeaking(false);
+    dragging = true;
+    setSpeaking(false);
     launcher.setPointerCapture(e.pointerId);
     const rect = launcher.getBoundingClientRect();
     dragOffset.x = e.clientX - rect.left; dragOffset.y = e.clientY - rect.top;
+    
     if (!bubble.classList.contains('qta-hidden')) {
       const b = bubble.getBoundingClientRect();
       dragBubbleLock = { offsetX: b.left - rect.left, offsetY: b.top - rect.top };
@@ -209,6 +202,7 @@
       dragBubbleLock = null;
     }
   });
+
   window.addEventListener('pointermove', (e) => {
     if (!dragging) return;
     const nx = e.clientX - dragOffset.x;
@@ -219,27 +213,21 @@
       bubble.style.top  = `${ny + dragBubbleLock.offsetY}px`;
     }
   }, { passive: true });
+
   window.addEventListener('pointerup', (e) => {
     if (!dragging) return;
-    dragging = false; launcher.releasePointerCapture?.(e.pointerId);
-    dragBubbleLock = null; 
-    setLauncherPosition({ top: parseFloat(launcher.style.top), left: parseFloat(launcher.style.left) }); // Clamp to screen edges
-    persistPosition(); startDrift();
+    dragging = false; 
+    launcher.releasePointerCapture?.(e.pointerId);
+    dragBubbleLock = null;
+    // Clamp final position to screen edges
+    setLauncherPosition({ top: parseFloat(launcher.style.top), left: parseFloat(launcher.style.left) });
+    persistPosition();
   });
 
   function toggleMute(){ isMuted = !isMuted; localStorage.setItem('qta_muted', isMuted ? '1' : '0'); updateMuteUI(); if (isMuted) cleanupSpeech(); }
   function updateMuteUI(){ muteBtn.textContent = isMuted ? 'Unmute' : 'Mute'; }
   function openPanel(){ panel.style.display = 'block'; }
   function hideAll(){ bubble.classList.add('qta-hidden'); panel.style.display='none'; }
-
-  // ------- Subtle drift -------
-  function startDrift(){ if (!CONFIG.driftWhenIdle || driftTimer) return; driftTimer = setInterval(()=>{
-    if (isSpeaking || dragging) return; const rect = launcher.getBoundingClientRect();
-    const dx=(Math.random()*2-1)*CONFIG.driftRadius; const dy=(Math.random()*2-1)*CONFIG.driftRadius;
-    const newPos = { top: rect.top + dy, left: rect.left + dx };
-    setLauncherPosition(newPos);
-  }, CONFIG.driftEveryMs); }
-  function stopDrift(){ if (driftTimer){ clearInterval(driftTimer); driftTimer=null; } }
 
   // ------- Fetch pitch / examples -------
   function pickContent(data){
@@ -299,7 +287,7 @@
         try { await audio.play(); } catch (err) { URL.revokeObjectURL(url); throw err; }
         return { audio, stop: () => { try { audio.pause(); audio.currentTime = 1e9; } catch {} URL.revokeObjectURL(url); } };
       } catch (e) {
-        // fall through to Web Speech
+        // Fall through to Web Speech
       }
     }
 
@@ -313,12 +301,12 @@
   // ------- Speak & Type (synced) -------
   async function say(text){
     bubble.classList.remove('qta-hidden'); ensureBubbleAnchor();
-    typingEl.textContent = ''; stopDrift(); setSpeaking(true);
+    typingEl.textContent = ''; setSpeaking(true);
 
     const caret = document.createElement('span'); caret.id='qta-caret'; typingEl.appendChild(caret);
     let typedLen = 0; let fallbackTimer = null; let mouthTimer = null; let speaker = null;
 
-    function typeTo(idx){ if (idx<=typedLen) return; typingEl.textContent = text.slice(0, idx); typingEl.appendChild(caret); typedLen = idx; ensureBubbleAnchor(); }
+    function typeTo(idx){ if (idx<=typedLen) return; typingEl.textContent = text.slice(0, idx); typingEl.appendChild(caret); typedLen = idx; if(!dragging) ensureBubbleAnchor(); }
     function pulseMouth(){ mouth.setAttribute('d', 'M 22 39 Q 32 45 42 39'); setTimeout(()=> mouth.setAttribute('d', 'M 22 39 Q 32 42 42 39'), 120); }
 
     try {
@@ -340,41 +328,33 @@
       try { if (fallbackTimer) clearInterval(fallbackTimer); } catch{}
       try { if (mouthTimer) clearInterval(mouthTimer); } catch{}
       typingEl.textContent = text; try{ caret.remove(); }catch{}
-      setSpeaking(false); startDrift(); mouth.setAttribute('d', initialMouthD); speaker?.stop?.();
+      setSpeaking(false); mouth.setAttribute('d', initialMouthD); speaker?.stop?.();
     }
   }
 
   function timedFallbackType(text, typeTo){ const chunk = 3; let i = 0; const ms = Math.max(12, Math.floor(6000 / Math.max(40, text.length))); const t = setInterval(()=>{ i = Math.min(text.length, i+chunk); typeTo(i); if (i>=text.length) clearInterval(t); }, ms); return t; }
-  async function typeOnly(text){ const chunk=3; for(let i=0;i<text.length;i+=chunk){ typingEl.textContent = text.slice(i,i+chunk); await sleep(16); ensureBubbleAnchor(); } }
+  async function typeOnly(text){ const chunk=3; for(let i=0;i<text.length;i+=chunk){ typingEl.textContent = text.slice(i,i+chunk); await sleep(16); if(!dragging) ensureBubbleAnchor(); } }
   function sleep(ms){ return new Promise(r=>setTimeout(r,ms)); }
 
-  function setSpeaking(v){ isSpeaking = !!v; if (v) stopDrift(); }
+  function setSpeaking(v){ isSpeaking = !!v; }
   function cleanupSpeech(){ try{ speechSynthesis.cancel(); }catch{} setSpeaking(false); mouth.setAttribute('d', initialMouthD); }
 
   // ------- Bubble anchoring to bot -------
   function ensureBubbleAnchor(){
-    // --- DEBUGGING LOG ---
-    // This will print every time the function is called, and from where.
-    console.log(`[DEBUG] ensureBubbleAnchor called. Dragging status: ${dragging}`);
-  
-    // ROBUST FIX: Do not run this logic if the user is actively dragging the element.
-    if (dragging) {
-      // --- DEBUGGING LOG ---
-      console.log(`[DEBUG] ANCHOR BLOCKED because dragging is true.`);
-      return;
-    }
+    if (dragging) return; // Don't run this logic if the user is actively dragging.
     if (bubble.classList.contains('qta-hidden')) return;
-  
+
     const lRect = launcher.getBoundingClientRect();
     const bRect = bubble.getBoundingClientRect();
     const vw = window.innerWidth, vh = window.innerHeight;
-  
+    
     let sideRight = lRect.right + 12 + bRect.width <= vw;
+    let left = sideRight ? (lRect.right + 10) : (lRect.left - bRect.width - 10);
     let top = lRect.top + lRect.height/2 - bRect.height/2;
-    if (top + bRect.height > vh - 10) top = vh - bRect.height - 10; if (top < 10) top = 10;
-    const left = sideRight ? (lRect.right + 10) : (lRect.left - bRect.width - 10);
-    bubble.style.top = `${Math.max(10, top)}px`;
-    bubble.style.left = `${Math.max(10, Math.min(vw - bRect.width - 10, left))}px`;
+    top = Math.max(10, Math.min(top, vh - bRect.height - 10));
+
+    bubble.style.top = `${top}px`; 
+    bubble.style.left = `${left}px`;
   }
   window.addEventListener('resize', ensureBubbleAnchor, { passive:true });
   window.addEventListener('scroll', ensureBubbleAnchor, { passive:true });
@@ -383,7 +363,7 @@
   let hasTriggered = false; function shouldTrigger(){ return scrollY > innerHeight * CONFIG.triggerScrollThresholdVH; }
   async function maybeTrigger(){ if (hasTriggered) return; if (!shouldTrigger()) return; hasTriggered = true; const msg = await fetchPitch(); await say(msg); }
   addEventListener('scroll', maybeTrigger, { passive:true });
-  addEventListener('load', () => { applyInitialPosition(); setTimeout(maybeTrigger, 1200); startDrift(); });
+  addEventListener('load', () => { applyInitialPosition(); setTimeout(maybeTrigger, 1200); });
 
   // Public API
   window.QTA = {
