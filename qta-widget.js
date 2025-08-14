@@ -142,7 +142,7 @@
   let driftTimer = null;
   let dragging = false;
   let dragOffset = { x: 0, y: 0 };
-  let dragBubbleLock = null; // keeps bubble stuck during drag
+  let dragBubbleLock = null;
 
   volumeSlider.value = String(volume);
   updateMuteUI();
@@ -159,7 +159,7 @@
     if (typeof top === 'number') launcher.style.top = `${Math.max(10, Math.min(window.innerHeight - launcher.offsetHeight - 10, top))}px`;
     if (typeof left === 'number') launcher.style.left = `${Math.max(10, Math.min(window.innerWidth - launcher.offsetWidth - 10, left))}px`;
     launcher.style.right = '';
-    if (!dragging) ensureBubbleAnchor();
+    ensureBubbleAnchor();
   }
   function persistPosition(){
     const styleTop = parseFloat(launcher.style.top || '0');
@@ -171,7 +171,7 @@
   panelClose.addEventListener('click', () => panel.style.display = 'none');
   launcher.addEventListener('click', (e) => { if (dragging) return; panel.style.display = (panel.style.display === 'block') ? 'none' : 'block'; });
   
-  // --- FIX: Added event propagation stop to prevent launcher's click handler from firing ---
+  // ROBUST FIX: Stop click from bubbling up to the launcher.
   examplesBtn.addEventListener('click', (e) => { 
     e.stopPropagation();
     handleExamplesClick();
@@ -181,12 +181,14 @@
     await say(await fetchPitch({ more:true })); 
   });
 
-  closeSessionBtn.addEventListener('click', () => { sessionStorage.setItem('qta_closed_session_v2','1'); cleanupSpeech(); hideAll(); });
-  muteBtn.addEventListener('click', toggleMute);
-  volumeSlider.addEventListener('input', () => { volume = parseFloat(volumeSlider.value); localStorage.setItem('qta_volume', String(volume)); });
+  closeSessionBtn.addEventListener('click', (e) => { e.stopPropagation(); sessionStorage.setItem('qta_closed_session_v2','1'); cleanupSpeech(); hideAll(); });
+  muteBtn.addEventListener('click', (e) => { e.stopPropagation(); toggleMute(); });
+  volumeSlider.addEventListener('input', (e) => e.stopPropagation());
 
   // Drag logic
   launcher.addEventListener('pointerdown', (e) => {
+    // Only drag with the main (left) mouse button
+    if (e.button !== 0) return;
     dragging = true; stopDrift(); setSpeaking(false);
     launcher.setPointerCapture(e.pointerId);
     const rect = launcher.getBoundingClientRect();
@@ -197,25 +199,22 @@
     } else {
       dragBubbleLock = null;
     }
-    // --- FIX: Removed ensureBubbleAnchor() call that was misaligning the bubble during drag ---
   });
   window.addEventListener('pointermove', (e) => {
     if (!dragging) return;
-    const nx = Math.max(10, Math.min(window.innerWidth - launcher.offsetWidth - 10, e.clientX - dragOffset.x));
-    const ny = Math.max(10, Math.min(window.innerHeight - launcher.offsetHeight - 10, e.clientY - dragOffset.y));
+    const nx = e.clientX - dragOffset.x;
+    const ny = e.clientY - dragOffset.y;
     launcher.style.left = `${nx}px`; launcher.style.top = `${ny}px`;
     if (dragBubbleLock) {
-      const l = launcher.getBoundingClientRect();
-      bubble.style.left = `${l.left + dragBubbleLock.offsetX}px`;
-      bubble.style.top  = `${l.top  + dragBubbleLock.offsetY}px`;
-    } else {
-      ensureBubbleAnchor();
+      bubble.style.left = `${nx + dragBubbleLock.offsetX}px`;
+      bubble.style.top  = `${ny + dragBubbleLock.offsetY}px`;
     }
   }, { passive: true });
   window.addEventListener('pointerup', (e) => {
     if (!dragging) return;
     dragging = false; launcher.releasePointerCapture?.(e.pointerId);
-    dragBubbleLock = null; ensureBubbleAnchor();
+    dragBubbleLock = null; 
+    setLauncherPosition({ top: parseFloat(launcher.style.top), left: parseFloat(launcher.style.left) }); // Clamp to screen edges
     persistPosition(); startDrift();
   });
 
@@ -228,7 +227,8 @@
   function startDrift(){ if (!CONFIG.driftWhenIdle || driftTimer) return; driftTimer = setInterval(()=>{
     if (isSpeaking || dragging) return; const rect = launcher.getBoundingClientRect();
     const dx=(Math.random()*2-1)*CONFIG.driftRadius; const dy=(Math.random()*2-1)*CONFIG.driftRadius;
-    setLauncherPosition({ top: rect.top + dy, left: rect.left + dx });
+    const newPos = { top: rect.top + dy, left: rect.left + dx };
+    setLauncherPosition(newPos);
   }, CONFIG.driftEveryMs); }
   function stopDrift(){ if (driftTimer){ clearInterval(driftTimer); driftTimer=null; } }
 
@@ -309,20 +309,17 @@
     const caret = document.createElement('span'); caret.id='qta-caret'; typingEl.appendChild(caret);
     let typedLen = 0; let fallbackTimer = null; let mouthTimer = null; let speaker = null;
 
-    function typeTo(idx){ if (idx<=typedLen) return; typingEl.textContent = text.slice(0, idx); typingEl.appendChild(caret); typedLen = idx; if(!dragging) ensureBubbleAnchor(); }
+    function typeTo(idx){ if (idx<=typedLen) return; typingEl.textContent = text.slice(0, idx); typingEl.appendChild(caret); typedLen = idx; ensureBubbleAnchor(); }
     function pulseMouth(){ mouth.setAttribute('d', 'M 22 39 Q 32 45 42 39'); setTimeout(()=> mouth.setAttribute('d', 'M 22 39 Q 32 42 42 39'), 120); }
 
     try {
       speaker = await speak(text);
-      // Manual type cadence (works for both ElevenLabs and Web Speech fallback)
       fallbackTimer = timedFallbackType(text, typeTo);
       mouthTimer = setInterval(pulseMouth, 420);
       if (speaker?.audio) {
         speaker.audio.onended = finish;
-        // safety timeout in case ended never fires
-        setTimeout(() => { try { speaker.audio.onended = null; } catch {} finish(); }, 18000);
+        setTimeout(() => { try { speaker.audio.onended = null; finish(); } catch {} }, 18000);
       } else {
-        // Web Speech: we don't get boundary reliably → estimate duration
         const estimatedMs = Math.max(2500, Math.min(14000, text.split(/\s+/).length * 320));
         setTimeout(()=>{ finish(); }, estimatedMs);
       }
@@ -339,7 +336,7 @@
   }
 
   function timedFallbackType(text, typeTo){ const chunk = 3; let i = 0; const ms = Math.max(12, Math.floor(6000 / Math.max(40, text.length))); const t = setInterval(()=>{ i = Math.min(text.length, i+chunk); typeTo(i); if (i>=text.length) clearInterval(t); }, ms); return t; }
-  async function typeOnly(text){ const chunk=3; for(let i=0;i<text.length;i+=chunk){ typingEl.textContent += text.slice(i,i+chunk); await sleep(16); if(!dragging) ensureBubbleAnchor(); } }
+  async function typeOnly(text){ const chunk=3; for(let i=0;i<text.length;i+=chunk){ typingEl.textContent = text.slice(i,i+chunk); await sleep(16); ensureBubbleAnchor(); } }
   function sleep(ms){ return new Promise(r=>setTimeout(r,ms)); }
 
   function setSpeaking(v){ isSpeaking = !!v; if (v) stopDrift(); }
@@ -347,14 +344,24 @@
 
   // ------- Bubble anchoring to bot -------
   function ensureBubbleAnchor(){
+    // ROBUST FIX: Do not run this logic if the user is actively dragging the element.
+    if (dragging) return;
+    if (bubble.classList.contains('qta-hidden')) return;
+
     const lRect = launcher.getBoundingClientRect();
     const bRect = bubble.getBoundingClientRect();
     const vw = window.innerWidth, vh = window.innerHeight;
+    
+    // Prefer to position bubble on the right side if there's space
     let sideRight = lRect.right + 12 + bRect.width <= vw;
+    let left = sideRight ? (lRect.right + 10) : (lRect.left - bRect.width - 10);
+    
+    // Center vertically, but clamp to viewport edges
     let top = lRect.top + lRect.height/2 - bRect.height/2;
-    if (top + bRect.height > vh - 10) top = vh - bRect.height - 10; if (top < 10) top = 10;
-    const left = sideRight ? (lRect.right + 10) : (lRect.left - bRect.width - 10);
-    bubble.style.top = `${Math.max(10, top)}px`; bubble.style.left = `${Math.max(10, Math.min(vw - bRect.width - 10, left))}px`;
+    top = Math.max(10, Math.min(top, vh - bRect.height - 10));
+
+    bubble.style.top = `${top}px`; 
+    bubble.style.left = `${left}px`;
   }
   window.addEventListener('resize', ensureBubbleAnchor, { passive:true });
   window.addEventListener('scroll', ensureBubbleAnchor, { passive:true });
