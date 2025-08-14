@@ -169,16 +169,25 @@
 
   // -------------- Events --------------
   panelClose.addEventListener('click', () => panel.style.display = 'none');
-  launcher.addEventListener('click', (e) => { if (dragging) return; panel.style.display = (panel.style.display === 'block') ? 'none' : 'block'; });
+  launcher.addEventListener('click', (e) => {
+  // --- DEBUGGING LOG ---
+  console.log("[DEBUG] LAUNCHER click handler fired.");
+  if (dragging) return;
+  panel.style.display = (panel.style.display === 'block') ? 'none' : 'block';
+  });
   
   // ROBUST FIX: Stop click from bubbling up to the launcher.
-  examplesBtn.addEventListener('click', (e) => { 
-    e.stopPropagation();
-    handleExamplesClick();
+  examplesBtn.addEventListener('click', (e) => {
+  // --- DEBUGGING LOG ---
+  console.log("[DEBUG] EXAMPLES button clicked.");
+  e.stopPropagation();
+  handleExamplesClick();
   });
-  moreBtn.addEventListener('click', async (e) => { 
-    e.stopPropagation();
-    await say(await fetchPitch({ more:true })); 
+  moreBtn.addEventListener('click', async (e) => {
+  // --- DEBUGGING LOG ---
+  console.log("[DEBUG] MORE button clicked.");
+  e.stopPropagation();
+  await say(await fetchPitch({ more:true }));
   });
 
   closeSessionBtn.addEventListener('click', (e) => { e.stopPropagation(); sessionStorage.setItem('qta_closed_session_v2','1'); cleanupSpeech(); hideAll(); });
