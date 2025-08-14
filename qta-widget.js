@@ -19,14 +19,14 @@
 
     // Copy
     systemPrompt:
-      'You are a concise, friendly sales agent for Quantackle. The site offers AI automation audits and implementation. ' +
-      'Write a VERY SHORT pitch (1–3 lines, under ~20s aloud). Focus on identifying 2–3 tasks that unlock 30–40% efficiency/savings ' +
-      '(e.g., lead triage, weekly reporting, invoice follow-ups). Avoid fluff. Use confident, helpful tone.',
+      'You are a sharp, friendly sales assistant for Quantackle, an AI automation firm. Your goal is to make a VERY short, compelling intervention based on page content. ' +
+      '1. Start with a hook using a powerful stat (ROI, savings, efficiency). Example: "We helped a client cut invoice processing time by 75%." or "Automating lead triage can boost sales conversions by over 20%." ' +
+      '2. Follow with a short, open-ended question. Example: "Curious how?" or "Want to know what that could look like for you?" ' +
+      'Keep the entire message under 25 words. Be direct and confident.',
     examplesPrompt:
-      'Give 3 short, concrete example prompts a site visitor might click. Each 6–10 words. Start each line with a • bullet. No numbering.',
+      'Give 3 short, punchy example prompts a visitor might click. Each 6–10 words. Focus on outcomes. Start each line with a • bullet. No numbering.',
     fallbackPitch:
-      'Quick tip: An AI Automation Audit often surfaces 2–3 high-impact tasks—lead triage, weekly reporting, invoice follow-ups—\n' +
-      'that deliver **30–40% time savings** within weeks. Want examples?',
+      'We recently helped a client automate 90% of their SEO reporting, saving 30 hours a month. Would you like to know more?',
 
     // ---- TTS (ElevenLabs via proxy) ----
     ttsProvider: 'proxy-tts',
@@ -81,7 +81,6 @@
   if (sessionStorage.getItem('qta_closed_session_v2') === '1') return;
 
   // ---------------- DOM ----------------
-  // The launcher and bubble are now siblings for cleaner event handling.
   const root = document.createElement('div'); root.id = 'qta-widget';
   root.innerHTML = `
     <div id="qta-panel" role="dialog" aria-label="Quantackle Sales Assistant">
@@ -167,14 +166,14 @@
   // -------------- Events --------------
   panelClose.addEventListener('click', () => panel.style.display = 'none');
   launcher.addEventListener('click', (e) => { if (dragging) return; panel.style.display = (panel.style.display === 'block') ? 'none' : 'block'; });
-  
-  examplesBtn.addEventListener('click', (e) => { 
-    e.stopPropagation(); // Good practice, though fix is in pointerdown
+
+  examplesBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
     handleExamplesClick();
   });
-  moreBtn.addEventListener('click', async (e) => { 
-    e.stopPropagation(); // Good practice
-    await say(await fetchPitch({ more:true })); 
+  moreBtn.addEventListener('click', async (e) => {
+    e.stopPropagation();
+    await say(await fetchPitch({ more:true }));
   });
   closeSessionBtn.addEventListener('click', () => { sessionStorage.setItem('qta_closed_session_v2','1'); cleanupSpeech(); hideAll(); });
   muteBtn.addEventListener('click', toggleMute);
@@ -182,19 +181,17 @@
 
   // Drag logic
   launcher.addEventListener('pointerdown', (e) => {
-    // THIS IS THE FIX: Ignore clicks that are not on the bot icon itself.
-    // This allows clicks on the bubble/buttons to pass through without starting a drag.
     if (e.target.closest('#qta-bubble')) {
         return;
     }
-    
+
     if (e.button !== 0) return;
     dragging = true;
     setSpeaking(false);
     launcher.setPointerCapture(e.pointerId);
     const rect = launcher.getBoundingClientRect();
     dragOffset.x = e.clientX - rect.left; dragOffset.y = e.clientY - rect.top;
-    
+
     if (!bubble.classList.contains('qta-hidden')) {
       const b = bubble.getBoundingClientRect();
       dragBubbleLock = { offsetX: b.left - rect.left, offsetY: b.top - rect.top };
@@ -216,10 +213,9 @@
 
   window.addEventListener('pointerup', (e) => {
     if (!dragging) return;
-    dragging = false; 
+    dragging = false;
     launcher.releasePointerCapture?.(e.pointerId);
     dragBubbleLock = null;
-    // Clamp final position to screen edges
     setLauncherPosition({ top: parseFloat(launcher.style.top), left: parseFloat(launcher.style.left) });
     persistPosition();
   });
@@ -233,24 +229,36 @@
   function pickContent(data){
     return data?.content || data?.message || data?.text || data?.choices?.[0]?.message?.content || '';
   }
+
   async function fetchPitch(opts={}){
-    const context = (document.querySelector('main')?.innerText || document.body.innerText || '').slice(0, 1600);
-    const modePrompt = opts.more ? 'Give one short follow-up (1–2 sentences) with concrete examples tailored to the context. Keep it brief.' : CONFIG.systemPrompt;
+    const context = (document.querySelector('main')?.innerText || document.body.innerText || '').slice(0, 2000);
+    let modePrompt = opts.more ? 'Give one short follow-up (1–2 sentences) with another concrete example. Keep it brief.' : CONFIG.systemPrompt;
+
+    // ** NEW: Content-aware logic **
+    if (context.toLowerCase().includes('japan travel')) {
+        modePrompt = 'You are a travel insurance assistant. The user is on a page about Japan travel. ' +
+                     'Your goal is to make a very short, compelling intervention. ' +
+                     '1. Start with a hook using a real stat about tourist accidents in Japan. Example: "Tourist-involved car accidents in Japan have been on the rise." ' +
+                     '2. Ask a question about the importance of travel insurance. Example: "Do you have the right travel insurance?" ' +
+                     'Keep the entire message under 30 words.';
+    }
+
     try {
       const res = await fetch(CONFIG.OPENAI_PROXY_URL, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ model: CONFIG.model, messages:[ {role:'system', content: modePrompt}, {role:'user', content:`Use this page context if helpful. Be brief.\n\n${context}`} ], max_tokens: opts.more ? 90 : 110 }) });
       const data = await res.json();
       const raw = pickContent(data) || CONFIG.fallbackPitch;
       return opts.more ? raw : clipIntro(raw);
-    } catch(e){ return opts.more ? 'For example: lead triage, reporting, invoice nudges. Want a 10-min audit call?' : CONFIG.fallbackPitch; }
+    } catch(e){ return opts.more ? 'For example: automate lead triage, reporting, or invoice nudges. Want a 10-min audit call?' : CONFIG.fallbackPitch; }
   }
+
   async function fetchExamples(){
     const context = (document.querySelector('main')?.innerText || document.body.innerText || '').slice(0, 1600);
     try {
       const res = await fetch(CONFIG.OPENAI_PROXY_URL, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ model: CONFIG.model, messages:[ {role:'system', content: CONFIG.examplesPrompt}, {role:'user', content:`Tailor to this page context.\n\n${context}`} ], max_tokens: 120 }) });
       const data = await res.json();
-      const txt = pickContent(data) || '• Show a 4-week automation plan\n• Estimate ROI from AI audit\n• What can you automate first?';
+      const txt = pickContent(data) || '• Show me a 4-week automation plan.\n• Estimate my potential ROI.\n• What are the first steps?';
       return txt;
-    } catch(e){ return '• Lead triage with enrichment\n• Auto-build monthly reports\n• Invoice reminders that work'; }
+    } catch(e){ return '• Automate lead enrichment.\n• Build monthly reports automatically.\n• Send invoice reminders that work.'; }
   }
 
   function renderExamples(list){
@@ -347,13 +355,13 @@
     const lRect = launcher.getBoundingClientRect();
     const bRect = bubble.getBoundingClientRect();
     const vw = window.innerWidth, vh = window.innerHeight;
-    
+
     let sideRight = lRect.right + 12 + bRect.width <= vw;
     let left = sideRight ? (lRect.right + 10) : (lRect.left - bRect.width - 10);
     let top = lRect.top + lRect.height/2 - bRect.height/2;
     top = Math.max(10, Math.min(top, vh - bRect.height - 10));
 
-    bubble.style.top = `${top}px`; 
+    bubble.style.top = `${top}px`;
     bubble.style.left = `${left}px`;
   }
   window.addEventListener('resize', ensureBubbleAnchor, { passive:true });
